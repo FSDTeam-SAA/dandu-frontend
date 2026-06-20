@@ -115,7 +115,7 @@ export function SkuSearchPage({ session }: { session: AuthSession }) {
           </button>
         </div>
         <Panel title="SKU Details">
-          <SkuDataTable data={selectedSku} />
+          <SkuDataTable data={selectedSku} session={session} onUpdate={refreshSelectedSku} />
         </Panel>
         <RestockCalculator data={selectedSku} />
         <ProfitCalculator data={selectedSku} />

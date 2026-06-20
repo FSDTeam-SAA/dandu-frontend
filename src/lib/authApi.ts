@@ -402,4 +402,12 @@ export const authApi = {
       token: accessToken,
     });
   },
+
+  updateProduct(accessToken: string, sku: string, data: Partial<SkuMetrics['product']>) {
+    return request<unknown>(`/sku-dashboard/product/${encodeURIComponent(sku)}`, {
+      method: 'PATCH',
+      token: accessToken,
+      body: JSON.stringify(data),
+    });
+  },
 };

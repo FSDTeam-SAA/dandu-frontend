@@ -1,4 +1,6 @@
-import { SkuMetrics } from '../../lib/authApi';
+import { useState } from 'react';
+import { Pencil, Check, X, Loader2 } from 'lucide-react';
+import { authApi, AuthSession, SkuMetrics } from '../../lib/authApi';
 
 function formatCurrency(value: string | number | null | undefined, currency = 'USD'): string {
   if (value == null) return '-';
@@ -95,8 +97,49 @@ const SALES_ROWS: { label: string; key: keyof ReturnType<typeof getChannelData> 
   { label: '365-Day Sales (units)', key: 'salesFBA365' },
 ];
 
-export function SkuDataTable({ data }: { data: SkuMetrics }) {
+export function SkuDataTable({ data, session, onUpdate }: { data: SkuMetrics; session?: AuthSession; onUpdate?: () => void }) {
+  const [isEditing, setIsEditing] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const product: any = data.product ?? {};
+
+  const [editValues, setEditValues] = useState({
+    cost: product.cost ?? '',
+    weight: product.weight ?? '',
+    length: product.dimensions?.length ?? product.length ?? '',
+    width: product.dimensions?.width ?? product.width ?? '',
+    height: product.dimensions?.height ?? product.height ?? '',
+  });
+
+  const handleSave = async () => {
+    if (!session || !onUpdate) return;
+    setIsSaving(true);
+    try {
+      await authApi.updateProduct(session.accessToken, data.sku, {
+        cost: editValues.cost === '' ? null : Number(editValues.cost),
+        weight: editValues.weight === '' ? null : Number(editValues.weight),
+        length: editValues.length === '' ? null : Number(editValues.length),
+        width: editValues.width === '' ? null : Number(editValues.width),
+        height: editValues.height === '' ? null : Number(editValues.height),
+      });
+      setIsEditing(false);
+      onUpdate();
+    } catch (err) {
+      alert('Failed to update product details');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleCancel = () => {
+    setIsEditing(false);
+    setEditValues({
+      cost: product.cost ?? '',
+      weight: product.weight ?? '',
+      length: product.dimensions?.length ?? product.length ?? '',
+      width: product.dimensions?.width ?? product.width ?? '',
+      height: product.dimensions?.height ?? product.height ?? '',
+    });
+  };
 
   const channelDefs = [
     { name: 'Amazon US', ch: 'AMAZON', country: 'US' },
@@ -139,7 +182,27 @@ export function SkuDataTable({ data }: { data: SkuMetrics }) {
           </tr>
           {/* Row 2 — Channel Headers */}
           <tr>
-            <th className={`${th} bg-slate-100 text-slate-600`}>Product Info</th>
+            <th className={`${th} bg-slate-100 text-slate-600`}>
+              <div className="flex justify-between items-center">
+                <span>Product Info</span>
+                {session && onUpdate && (
+                  !isEditing ? (
+                    <button onClick={() => setIsEditing(true)} className="inline-flex items-center gap-1 rounded bg-slate-200 px-2 py-1 text-[10px] font-bold text-slate-700 hover:bg-slate-300 transition">
+                      <Pencil className="size-3" /> Edit
+                    </button>
+                  ) : (
+                    <div className="flex gap-1">
+                      <button onClick={handleSave} disabled={isSaving} className="inline-flex items-center gap-1 rounded bg-emerald-600 px-2 py-1 text-[10px] font-bold text-white hover:bg-emerald-700 transition">
+                        {isSaving ? <Loader2 className="size-3 animate-spin" /> : <Check className="size-3" />} Save
+                      </button>
+                      <button onClick={handleCancel} disabled={isSaving} className="inline-flex items-center gap-1 rounded bg-red-100 px-2 py-1 text-[10px] font-bold text-red-700 hover:bg-red-200 transition">
+                        <X className="size-3" /> Cancel
+                      </button>
+                    </div>
+                  )
+                )}
+              </div>
+            </th>
             {channels.map((c) => (
               <th key={c.name} className={`${th} bg-emerald-700 text-white text-center`}>{c.name}</th>
             ))}
@@ -205,12 +268,29 @@ export function SkuDataTable({ data }: { data: SkuMetrics }) {
           {/* Attributes + Sales Velocity Matrix */}
           {ATTRIBUTE_ROWS.map((row, i) => {
             const salesRow = SALES_ROWS[i];
+            
+            let editContent = <span className="font-semibold text-slate-900">{attrValues[row.label] ?? 'N/A'}</span>;
+            
+            if (isEditing) {
+              if (row.label === 'COST') {
+                editContent = <input type="number" step="0.01" className="w-20 rounded border border-slate-300 px-1 py-0.5 text-right font-semibold outline-none focus:border-emerald-500" value={editValues.cost} onChange={e => setEditValues({ ...editValues, cost: e.target.value })} />;
+              } else if (row.label === 'WEIGHT (oz / lbs)') {
+                editContent = <input type="number" step="0.01" className="w-20 rounded border border-slate-300 px-1 py-0.5 text-right font-semibold outline-none focus:border-emerald-500" value={editValues.weight} onChange={e => setEditValues({ ...editValues, weight: e.target.value })} />;
+              } else if (row.label === 'LENGTH (in)') {
+                editContent = <input type="number" step="0.01" className="w-20 rounded border border-slate-300 px-1 py-0.5 text-right font-semibold outline-none focus:border-emerald-500" value={editValues.length} onChange={e => setEditValues({ ...editValues, length: e.target.value })} />;
+              } else if (row.label === 'WIDTH (in)') {
+                editContent = <input type="number" step="0.01" className="w-20 rounded border border-slate-300 px-1 py-0.5 text-right font-semibold outline-none focus:border-emerald-500" value={editValues.width} onChange={e => setEditValues({ ...editValues, width: e.target.value })} />;
+              } else if (row.label === 'HEIGHT (in)') {
+                editContent = <input type="number" step="0.01" className="w-20 rounded border border-slate-300 px-1 py-0.5 text-right font-semibold outline-none focus:border-emerald-500" value={editValues.height} onChange={e => setEditValues({ ...editValues, height: e.target.value })} />;
+              }
+            }
+
             return (
               <tr key={row.label} className={i % 2 === 0 ? 'bg-slate-50 hover:bg-slate-100 transition-colors' : 'hover:bg-slate-50 transition-colors'}>
                 <td className={tdLeft}>
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-[11px] font-bold uppercase tracking-wide text-slate-500">{row.label}</span>
-                    <span className="font-semibold text-slate-900">{attrValues[row.label] ?? 'N/A'}</span>
+                    {editContent}
                   </div>
                 </td>
                 {channels.map((c) => (
