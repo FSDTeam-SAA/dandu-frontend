@@ -56,8 +56,8 @@ export function ImportPage({ session }: { session: AuthSession }) {
         content: fileContent,
       });
       setResult(response.data as ImportResult);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Import failed');
+    } catch (err: any) {
+      setError(err?.response?.data?.message || err?.message || 'Import failed');
     } finally {
       setLoading(false);
     }

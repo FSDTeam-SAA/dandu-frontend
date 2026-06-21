@@ -60,8 +60,9 @@ export function DashboardPage({ session, profile }: { session: AuthSession; prof
     try {
       const response = await authApi.getDashboardMetrics(session.accessToken, p);
       setMetrics(response.data);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load metrics');
+    } catch (err: any) {
+      const msg = err?.response?.data?.message || err?.message || 'Failed to load metrics';
+      setError(msg);
       setMetrics({
         salesVelocity: [],
         stockDistribution: [],
@@ -98,8 +99,9 @@ export function DashboardPage({ session, profile }: { session: AuthSession; prof
       setSyncResult(response.data);
       // After sync, refresh metrics automatically
       await fetchMetrics(period, true);
-    } catch {
-      setError('Sync failed. Please try again.');
+    } catch (err: any) {
+      const msg = err?.response?.data?.message || err?.message || 'Sync failed. Please try again.';
+      setError(msg);
     } finally {
       clearInterval(interval);
       setSyncing(false);

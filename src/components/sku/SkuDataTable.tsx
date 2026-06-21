@@ -100,6 +100,7 @@ const SALES_ROWS: { label: string; key: keyof ReturnType<typeof getChannelData> 
 export function SkuDataTable({ data, session, onUpdate }: { data: SkuMetrics; session?: AuthSession; onUpdate?: () => void }) {
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState('');
   const product: any = data.product ?? {};
 
   const [editValues, setEditValues] = useState({
@@ -108,11 +109,15 @@ export function SkuDataTable({ data, session, onUpdate }: { data: SkuMetrics; se
     length: product.dimensions?.length ?? product.length ?? '',
     width: product.dimensions?.width ?? product.width ?? '',
     height: product.dimensions?.height ?? product.height ?? '',
+    material: product.material ?? '',
+    thickness: product.thickness ?? '',
+    packQty: product.packQty ?? '',
   });
 
   const handleSave = async () => {
     if (!session || !onUpdate) return;
     setIsSaving(true);
+    setError('');
     try {
       await authApi.updateProduct(session.accessToken, data.sku, {
         cost: editValues.cost === '' ? null : Number(editValues.cost),
@@ -120,11 +125,14 @@ export function SkuDataTable({ data, session, onUpdate }: { data: SkuMetrics; se
         length: editValues.length === '' ? null : Number(editValues.length),
         width: editValues.width === '' ? null : Number(editValues.width),
         height: editValues.height === '' ? null : Number(editValues.height),
+        material: editValues.material === '' ? null : editValues.material,
+        thickness: editValues.thickness === '' ? null : editValues.thickness,
+        packQty: editValues.packQty === '' ? null : Number(editValues.packQty),
       });
       setIsEditing(false);
       onUpdate();
-    } catch (err) {
-      alert('Failed to update product details');
+    } catch (err: any) {
+      setError(err?.response?.data?.message || err?.message || 'Failed to update product details. Please try again.');
     } finally {
       setIsSaving(false);
     }
@@ -132,12 +140,16 @@ export function SkuDataTable({ data, session, onUpdate }: { data: SkuMetrics; se
 
   const handleCancel = () => {
     setIsEditing(false);
+    setError('');
     setEditValues({
       cost: product.cost ?? '',
       weight: product.weight ?? '',
       length: product.dimensions?.length ?? product.length ?? '',
       width: product.dimensions?.width ?? product.width ?? '',
       height: product.dimensions?.height ?? product.height ?? '',
+      material: product.material ?? '',
+      thickness: product.thickness ?? '',
+      packQty: product.packQty ?? '',
     });
   };
 
@@ -170,6 +182,12 @@ export function SkuDataTable({ data, session, onUpdate }: { data: SkuMetrics; se
 
   return (
     <div className="mt-2 overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm text-sm">
+      {error && (
+        <div className="bg-red-50 border-b border-red-200 px-4 py-2.5 text-xs font-semibold text-red-800 flex items-center justify-between">
+          <span>Error: {error}</span>
+          <button onClick={() => setError('')} className="text-red-500 hover:text-red-700 font-bold text-base line-height-1">×</button>
+        </div>
+      )}
       <table className="w-full min-w-[900px] border-collapse text-left">
         <thead>
           {/* Row 1 — SKU + Title */}
@@ -282,6 +300,12 @@ export function SkuDataTable({ data, session, onUpdate }: { data: SkuMetrics; se
                 editContent = <input type="number" step="0.01" className="w-20 rounded border border-slate-300 px-1 py-0.5 text-right font-semibold outline-none focus:border-emerald-500" value={editValues.width} onChange={e => setEditValues({ ...editValues, width: e.target.value })} />;
               } else if (row.label === 'HEIGHT (in)') {
                 editContent = <input type="number" step="0.01" className="w-20 rounded border border-slate-300 px-1 py-0.5 text-right font-semibold outline-none focus:border-emerald-500" value={editValues.height} onChange={e => setEditValues({ ...editValues, height: e.target.value })} />;
+              } else if (row.label === 'MATERIAL') {
+                editContent = <input type="text" className="w-24 rounded border border-slate-300 px-1 py-0.5 text-right font-semibold outline-none focus:border-emerald-500" value={editValues.material} onChange={e => setEditValues({ ...editValues, material: e.target.value })} />;
+              } else if (row.label === 'THICKNESS') {
+                editContent = <input type="text" className="w-24 rounded border border-slate-300 px-1 py-0.5 text-right font-semibold outline-none focus:border-emerald-500" value={editValues.thickness} onChange={e => setEditValues({ ...editValues, thickness: e.target.value })} />;
+              } else if (row.label === 'PACK QTY') {
+                editContent = <input type="number" step="1" className="w-20 rounded border border-slate-300 px-1 py-0.5 text-right font-semibold outline-none focus:border-emerald-500" value={editValues.packQty} onChange={e => setEditValues({ ...editValues, packQty: e.target.value })} />;
               }
             }
 
