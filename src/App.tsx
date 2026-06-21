@@ -1,5 +1,7 @@
 import { FormEvent, useEffect, useState } from 'react';
 import {
+  AUTH_SESSION_CHANGED_EVENT,
+  AUTH_STORAGE_KEY,
   authApi,
   type AuthSession,
   type CurrentUserProfile,
@@ -20,11 +22,9 @@ import { SecurityPage } from './pages/SecurityPage';
 
 type AuthScreen = 'sign-in' | 'sign-up' | 'verify-sign-up' | 'forgot-password' | 'verify-reset' | 'reset-password';
 
-const storageKey = 'dandu.auth.session';
-
 const readStoredSession = (): AuthSession | null => {
   try {
-    const stored = localStorage.getItem(storageKey);
+    const stored = localStorage.getItem(AUTH_STORAGE_KEY);
     return stored ? (JSON.parse(stored) as AuthSession) : null;
   } catch {
     return null;
@@ -65,10 +65,10 @@ function App() {
   const persistSession = (nextSession: AuthSession | null) => {
     setSession(nextSession);
     if (nextSession && rememberSession) {
-      localStorage.setItem(storageKey, JSON.stringify(nextSession));
+      localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(nextSession));
       return;
     }
-    localStorage.removeItem(storageKey);
+    localStorage.removeItem(AUTH_STORAGE_KEY);
   };
 
   const clearFeedback = () => {
@@ -95,6 +95,20 @@ function App() {
       .then((response) => setProfile(response.data))
       .catch(() => undefined);
   }, [session?.accessToken]);
+
+  useEffect(() => {
+    const handleSessionChanged = (event: Event) => {
+      const nextSession = (event as CustomEvent<AuthSession | null>).detail;
+      setSession(nextSession);
+      if (!nextSession) {
+        setProfile(null);
+        setAuthScreen('sign-in');
+      }
+    };
+
+    window.addEventListener(AUTH_SESSION_CHANGED_EVENT, handleSessionChanged);
+    return () => window.removeEventListener(AUTH_SESSION_CHANGED_EVENT, handleSessionChanged);
+  }, []);
 
   const signIn = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();

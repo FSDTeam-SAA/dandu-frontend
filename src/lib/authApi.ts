@@ -99,20 +99,57 @@ type ApiEnvelope<T> = {
 };
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:5000/v1';
+export const AUTH_STORAGE_KEY = 'dandu.auth.session';
+export const AUTH_SESSION_CHANGED_EVENT = 'dandu.auth.session.changed';
 
-async function request<T>(
-  path: string,
-  options: RequestInit & { token?: string } = {},
-): Promise<ApiEnvelope<T>> {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(options.token ? { Authorization: `Bearer ${options.token}` } : {}),
-      ...options.headers,
-    },
+function readStoredAuthSession(): AuthSession | null {
+  try {
+    const stored = localStorage.getItem(AUTH_STORAGE_KEY);
+    return stored ? (JSON.parse(stored) as AuthSession) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredAuthSession(session: AuthSession | null) {
+  if (session) {
+    localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(session));
+  } else {
+    localStorage.removeItem(AUTH_STORAGE_KEY);
+  }
+
+  window.dispatchEvent(
+    new CustomEvent<AuthSession | null>(AUTH_SESSION_CHANGED_EVENT, {
+      detail: session,
+    }),
+  );
+}
+
+async function refreshStoredAuthSession(): Promise<string | null> {
+  const session = readStoredAuthSession();
+  if (!session?.refreshToken) return null;
+
+  const response = await fetch(`${API_BASE_URL}/auth/refresh-token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ refreshToken: session.refreshToken }),
   });
 
+  const body = await response.json().catch(() => null);
+  if (!response.ok || !body?.data?.accessToken) {
+    writeStoredAuthSession(null);
+    return null;
+  }
+
+  const refreshedSession: AuthSession = {
+    ...session,
+    ...body.data,
+  };
+  writeStoredAuthSession(refreshedSession);
+  return refreshedSession.accessToken;
+}
+
+async function parseResponse<T>(response: Response): Promise<ApiEnvelope<T>> {
   const contentType = response.headers.get('content-type');
   const isJson = contentType && contentType.includes('application/json');
 
@@ -141,6 +178,39 @@ async function request<T>(
   }
 
   return body as ApiEnvelope<T>;
+}
+
+async function request<T>(
+  path: string,
+  options: RequestInit & { token?: string } = {},
+): Promise<ApiEnvelope<T>> {
+  const makeRequest = (token?: string) => fetch(`${API_BASE_URL}${path}`, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...options.headers,
+    },
+  });
+
+  let response = await makeRequest(options.token);
+
+  if (response.status === 401 && options.token && path !== '/auth/refresh-token') {
+    const cloned = response.clone();
+    const body = await cloned.json().catch(() => null);
+    const message = body && typeof body === 'object' && 'message' in body
+      ? String(body.message)
+      : '';
+
+    if (message.includes('Token has expired')) {
+      const refreshedToken = await refreshStoredAuthSession();
+      if (refreshedToken) {
+        response = await makeRequest(refreshedToken);
+      }
+    }
+  }
+
+  return parseResponse<T>(response);
 }
 
 
