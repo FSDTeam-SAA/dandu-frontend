@@ -2,11 +2,11 @@ import { useState } from 'react';
 import { Pencil, Check, X, Loader2 } from 'lucide-react';
 import { authApi, AuthSession, SkuMetrics } from '../../lib/authApi';
 
-function formatCurrency(value: string | number | null | undefined, currency = 'USD'): string {
+function formatCurrency(value: string | number | null | undefined): string {
   if (value == null) return '-';
   const num = typeof value === 'string' ? parseFloat(value) : value;
   if (isNaN(num)) return '-';
-  return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(num);
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(num);
 }
 
 function formatNumber(value: string | number | null | undefined): string {
@@ -14,6 +14,16 @@ function formatNumber(value: string | number | null | undefined): string {
   const num = typeof value === 'string' ? parseFloat(value) : value;
   if (isNaN(num)) return '-';
   return num.toLocaleString();
+}
+
+function formatWeight(value: string | number | null | undefined): string {
+  if (value == null) return '-';
+  const ounces = typeof value === 'string' ? parseFloat(value) : value;
+  if (isNaN(ounces)) return '-';
+
+  const pounds = ounces / 16;
+  const kilograms = ounces * 0.0283495;
+  return `${ounces.toLocaleString(undefined, { maximumFractionDigits: 3 })} oz / ${pounds.toLocaleString(undefined, { maximumFractionDigits: 3 })} lb / ${kilograms.toLocaleString(undefined, { maximumFractionDigits: 3 })} kg`;
 }
 
 /**
@@ -70,8 +80,8 @@ function getChannelData(metrics: SkuMetrics, channelName: string, country?: stri
     asin: channel?.asin ?? '-',
     fbaQty: stockFBA?.available != null ? stockFBA.available.toLocaleString() : '-',
     mfnQty: stockMFN?.available != null ? stockMFN.available.toLocaleString() : '-',
-    fbaPrice: formatCurrency(channel?.price, channel?.currency),
-    mfnPrice: formatCurrency(channel?.price, channel?.currency),
+    fbaPrice: formatCurrency(channel?.price),
+    mfnPrice: formatCurrency(channel?.price),
     salesFBA7: getSalesForPeriod(metrics, channelName, country, 7),
     salesFBA30: getSalesForPeriod(metrics, channelName, country, 30),
     salesFBA90: getSalesForPeriod(metrics, channelName, country, 90),
@@ -81,7 +91,7 @@ function getChannelData(metrics: SkuMetrics, channelName: string, country?: stri
 
 const ATTRIBUTE_ROWS = [
   { label: 'COST' },
-  { label: 'WEIGHT (oz / lbs)' },
+  { label: 'WEIGHT (oz / lb / kg)' },
   { label: 'LENGTH (in)' },
   { label: 'WIDTH (in)' },
   { label: 'HEIGHT (in)' },
@@ -166,8 +176,8 @@ export function SkuDataTable({ data, session, onUpdate }: { data: SkuMetrics; se
   }));
 
   const attrValues: Record<string, string> = {
-    'COST': formatCurrency(product.cost, product.currency),
-    'WEIGHT (oz / lbs)': formatNumber(product.weight),
+    'COST': formatCurrency(product.cost),
+    'WEIGHT (oz / lb / kg)': formatWeight(product.weight),
     'LENGTH (in)': formatNumber(product.dimensions?.length ?? product.length),
     'WIDTH (in)': formatNumber(product.dimensions?.width ?? product.width),
     'HEIGHT (in)': formatNumber(product.dimensions?.height ?? product.height),
@@ -292,7 +302,7 @@ export function SkuDataTable({ data, session, onUpdate }: { data: SkuMetrics; se
             if (isEditing) {
               if (row.label === 'COST') {
                 editContent = <input type="number" step="0.01" className="w-20 rounded border border-slate-300 px-1 py-0.5 text-right font-semibold outline-none focus:border-emerald-500" value={editValues.cost} onChange={e => setEditValues({ ...editValues, cost: e.target.value })} />;
-              } else if (row.label === 'WEIGHT (oz / lbs)') {
+              } else if (row.label === 'WEIGHT (oz / lb / kg)') {
                 editContent = <input type="number" step="0.01" className="w-20 rounded border border-slate-300 px-1 py-0.5 text-right font-semibold outline-none focus:border-emerald-500" value={editValues.weight} onChange={e => setEditValues({ ...editValues, weight: e.target.value })} />;
               } else if (row.label === 'LENGTH (in)') {
                 editContent = <input type="number" step="0.01" className="w-20 rounded border border-slate-300 px-1 py-0.5 text-right font-semibold outline-none focus:border-emerald-500" value={editValues.length} onChange={e => setEditValues({ ...editValues, length: e.target.value })} />;
