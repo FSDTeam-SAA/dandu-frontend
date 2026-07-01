@@ -75,6 +75,19 @@ export type SyncResult = {
   durationMs: number;
 };
 
+export type InventoryRefreshResult = {
+  status: 'COMPLETED' | 'FAILED';
+  remainingSkus: string[];
+  remainingSkuCount: number;
+  deletedSkus: number;
+  updatedSkus: number;
+  updatedStock: number;
+  updatedListings: number;
+  refreshedAt: string;
+  durationMs: number;
+  errorMessage?: string;
+};
+
 export type HistoricalSalesIngestionPayload = {
   fromDate?: string;
   toDate?: string;
@@ -497,6 +510,14 @@ export const authApi = {
       method: 'POST',
       token: accessToken,
       body: JSON.stringify({ queued: false }),
+    });
+  },
+
+  refreshInventory(accessToken: string) {
+    return request<InventoryRefreshResult>('/sku-dashboard/refresh-inventory', {
+      method: 'POST',
+      token: accessToken,
+      body: JSON.stringify({}),
     });
   },
 

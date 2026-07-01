@@ -17,6 +17,8 @@ export function SkuSearchPage({ session }: { session: AuthSession }) {
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState('');
+  const [refreshMessage, setRefreshMessage] = useState('');
+  const [refreshingInventory, setRefreshingInventory] = useState(false);
   
   const [selectedSku, setSelectedSku] = useState<SkuMetrics | null>(null);
   const [refreshingSku, setRefreshingSku] = useState(false);
@@ -87,6 +89,24 @@ export function SkuSearchPage({ session }: { session: AuthSession }) {
       // silently fail on refresh
     } finally {
       setRefreshingSku(false);
+    }
+  };
+
+  const refreshInventory = async () => {
+    setRefreshingInventory(true);
+    setError('');
+    setRefreshMessage('');
+
+    try {
+      const response = await authApi.refreshInventory(session.accessToken);
+      setRefreshMessage(
+        `Inventory refreshed: ${response.data.remainingSkuCount.toLocaleString()} SKUs remaining, ${response.data.deletedSkus.toLocaleString()} stale SKUs deleted.`,
+      );
+      await fetchSkus(activeFilters);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to refresh inventory');
+    } finally {
+      setRefreshingInventory(false);
     }
   };
 
@@ -169,11 +189,26 @@ export function SkuSearchPage({ session }: { session: AuthSession }) {
                 <option value="WEBSITE">DistinctAndUnique</option>
               </select>
             </label>
+
+            <button
+              onClick={refreshInventory}
+              disabled={refreshingInventory || loading}
+              className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-emerald-700 px-4 text-sm font-black text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
+              title="Pull current Linnworks inventory and delete SKUs that no longer exist in Linnworks"
+            >
+              {refreshingInventory ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+              Refresh Inventory
+            </button>
           </div>
         </Panel>
       </div>
 
       {error ? <InlineError text={error} /> : null}
+      {refreshMessage ? (
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">
+          {refreshMessage}
+        </div>
+      ) : null}
 
       {/* Master List View */}
       <div>

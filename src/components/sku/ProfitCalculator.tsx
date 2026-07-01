@@ -18,7 +18,6 @@ function estimateFBAFee(weightLbs: number): number {
 interface ChannelMargin {
   channel: string;
   price: number;
-  currency: string;
   referralFee: number;
   fbaFee: number;
   cogs: number;
@@ -61,7 +60,6 @@ function calcMargins(
       return {
         channel: label,
         price,
-        currency: c.currency || 'USD',
         referralFee,
         fbaFee,
         cogs,
@@ -73,8 +71,8 @@ function calcMargins(
     });
 }
 
-function fmt(n: number, currency = 'USD') {
-  return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(n);
+function fmt(n: number) {
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
 }
 
 export function ProfitCalculator({ data }: { data: SkuMetrics }) {
@@ -144,7 +142,7 @@ export function ProfitCalculator({ data }: { data: SkuMetrics }) {
                   <td className="py-3 pr-4">
                     <span className="font-semibold text-slate-900">{m.channel}</span>
                   </td>
-                  <td className="py-3 pr-4 text-right font-bold text-slate-800">{fmt(m.price, m.currency)}</td>
+                  <td className="py-3 pr-4 text-right font-bold text-slate-800">{fmt(m.price)}</td>
                   <td className="py-3 pr-4 text-right text-slate-600">-{fmt(m.cogs)}</td>
                   <td className="py-3 pr-4 text-right text-slate-600">-{fmt(m.referralFee)}</td>
                   <td className="py-3 pr-4 text-right text-slate-600">-{fmt(m.fbaFee)}</td>
