@@ -1,8 +1,9 @@
 import { useState } from 'react';
-import { Pencil, Check, X, Loader2 } from 'lucide-react';
+import { Pencil, Check, X, Loader2, ExternalLink } from 'lucide-react';
 import { authApi, AuthSession, SkuMetrics } from '../../lib/authApi';
 
 type UnknownRecord = Record<string, unknown>;
+type FulfillmentTab = 'FBA' | 'MFN';
 
 function formatCurrency(value: string | number | null | undefined): string {
   if (value == null) return '-';
@@ -73,6 +74,18 @@ function collectColumns(rows: UnknownRecord[], preferredColumns: string[]): stri
   return columns;
 }
 
+function getMarketplaceUrl(channel: string, country: string | undefined, asin: string | null, listingId: string | null): string | null {
+  if (channel === 'AMAZON' && asin && asin !== '-') {
+    const domain = country === 'CA' ? 'amazon.ca' : 'amazon.com';
+    return `https://www.${domain}/dp/${asin}`;
+  }
+  if (channel === 'EBAY') {
+    const ebayId = (listingId && listingId !== '-') ? listingId : (asin && asin !== '-' ? asin : null);
+    if (ebayId) return `https://www.ebay.com/itm/${ebayId}`;
+  }
+  return null;
+}
+
 function DetailTable({
   title,
   rows,
@@ -128,25 +141,27 @@ function DetailTable({
 }
 
 /**
- * Pick the best matching salesMetrics entry for a given channel/country/period combo.
- * The mock data stores one entry per period bucket, so we match on period length in days.
+ * Pick the best matching salesMetrics entry for a given channel/country/period/fulfillmentType combo.
  */
 function getSalesForPeriod(
   metrics: SkuMetrics,
   channelName: string,
   country: string | undefined,
   targetDays: number,
+  fulfillmentType?: string,
 ): string {
-  // Build a sorted list of relevant entries
   const relevant = metrics.salesMetrics.filter((m: any) => {
     if (m.channel !== channelName) return false;
-    if (country && m.country !== country) return false;
+    if (country && m.country && m.country !== country) return false;
+    if (fulfillmentType && fulfillmentType !== 'ALL') {
+      const mFt = m.fulfillmentType ?? 'ALL';
+      if (mFt !== 'ALL' && mFt !== fulfillmentType) return false;
+    }
     return true;
   }) as any[];
 
   if (!relevant.length) return '-';
 
-  // Find the entry whose period length is closest to targetDays
   const withLen = relevant.map((m: any) => {
     const start = new Date(m.periodStart).getTime();
     const end = new Date(m.periodEnd).getTime();
@@ -157,14 +172,13 @@ function getSalesForPeriod(
   const exact = withLen.find((m) => m.days === targetDays);
   if (exact) return exact.unitsSold > 0 ? exact.unitsSold.toLocaleString() : '-';
 
-  // Fall back to the closest match
   const closest = withLen.reduce((prev, curr) =>
     Math.abs(curr.days - targetDays) < Math.abs(prev.days - targetDays) ? curr : prev,
   );
   return closest.unitsSold > 0 ? closest.unitsSold.toLocaleString() : '-';
 }
 
-function getChannelData(metrics: SkuMetrics, channelName: string, country?: string) {
+function getChannelData(metrics: SkuMetrics, channelName: string, country?: string, fulfillmentTab?: FulfillmentTab) {
   const channel = metrics.channels.find(
     (c: any) => c.channel === channelName && (!country || c.country === country),
   ) as any;
@@ -179,14 +193,23 @@ function getChannelData(metrics: SkuMetrics, channelName: string, country?: stri
 
   return {
     asin: channel?.asin ?? '-',
+    listingId: channel?.listingId ?? null,
     fbaQty: stockFBA?.available != null ? stockFBA.available.toLocaleString() : '-',
     mfnQty: stockMFN?.available != null ? stockMFN.available.toLocaleString() : '-',
-    fbaPrice: formatCurrency(channel?.price),
-    mfnPrice: formatCurrency(channel?.price),
-    salesFBA7: getSalesForPeriod(metrics, channelName, country, 7),
-    salesFBA30: getSalesForPeriod(metrics, channelName, country, 30),
-    salesFBA90: getSalesForPeriod(metrics, channelName, country, 90),
-    salesFBA365: getSalesForPeriod(metrics, channelName, country, 365),
+    fbaPrice: formatCurrency(channel?.fbaPrice ?? channel?.price),
+    mfnPrice: formatCurrency(channel?.mfnPrice),
+    salesFBA7: getSalesForPeriod(metrics, channelName, country, 7, 'FBA'),
+    salesFBA30: getSalesForPeriod(metrics, channelName, country, 30, 'FBA'),
+    salesFBA90: getSalesForPeriod(metrics, channelName, country, 90, 'FBA'),
+    salesFBA365: getSalesForPeriod(metrics, channelName, country, 365, 'FBA'),
+    salesMFN7: getSalesForPeriod(metrics, channelName, country, 7, 'MFN'),
+    salesMFN30: getSalesForPeriod(metrics, channelName, country, 30, 'MFN'),
+    salesMFN90: getSalesForPeriod(metrics, channelName, country, 90, 'MFN'),
+    salesMFN365: getSalesForPeriod(metrics, channelName, country, 365, 'MFN'),
+    salesALL7: getSalesForPeriod(metrics, channelName, country, 7, 'ALL'),
+    salesALL30: getSalesForPeriod(metrics, channelName, country, 30, 'ALL'),
+    salesALL90: getSalesForPeriod(metrics, channelName, country, 90, 'ALL'),
+    salesALL365: getSalesForPeriod(metrics, channelName, country, 365, 'ALL'),
   };
 }
 
@@ -202,17 +225,28 @@ const ATTRIBUTE_ROWS = [
   { label: 'PACK QTY' },
 ] as const;
 
-const SALES_ROWS: { label: string; key: keyof ReturnType<typeof getChannelData> }[] = [
-  { label: '7-Day Sales (units)', key: 'salesFBA7' },
-  { label: '30-Day Sales (units)', key: 'salesFBA30' },
-  { label: '90-Day Sales (units)', key: 'salesFBA90' },
-  { label: '365-Day Sales (units)', key: 'salesFBA365' },
-];
+function getSalesRowsForTab(tab: FulfillmentTab): { label: string; key: string }[] {
+  if (tab === 'FBA') {
+    return [
+      { label: '7-Day FBA Sales (units)', key: 'salesFBA7' },
+      { label: '30-Day FBA Sales (units)', key: 'salesFBA30' },
+      { label: '90-Day FBA Sales (units)', key: 'salesFBA90' },
+      { label: '365-Day FBA Sales (units)', key: 'salesFBA365' },
+    ];
+  }
+  return [
+    { label: '7-Day MFN Sales (units)', key: 'salesMFN7' },
+    { label: '30-Day MFN Sales (units)', key: 'salesMFN30' },
+    { label: '90-Day MFN Sales (units)', key: 'salesMFN90' },
+    { label: '365-Day MFN Sales (units)', key: 'salesMFN365' },
+  ];
+}
 
 export function SkuDataTable({ data, session, onUpdate }: { data: SkuMetrics; session?: AuthSession; onUpdate?: () => void }) {
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState('');
+  const [fulfillmentTab, setFulfillmentTab] = useState<FulfillmentTab>('FBA');
   const product: any = data.product ?? {};
 
   const [editValues, setEditValues] = useState({
@@ -274,8 +308,10 @@ export function SkuDataTable({ data, session, onUpdate }: { data: SkuMetrics; se
 
   const channels = channelDefs.map((def) => ({
     ...def,
-    data: getChannelData(data, def.ch, def.country),
+    data: getChannelData(data, def.ch, def.country, fulfillmentTab),
   }));
+
+  const salesRows = getSalesRowsForTab(fulfillmentTab);
 
   const attrValues: Record<string, string> = {
     'CATEGORY': product.category ?? 'N/A',
@@ -295,7 +331,7 @@ export function SkuDataTable({ data, session, onUpdate }: { data: SkuMetrics; se
   const productRows = data.product ? [data.product as UnknownRecord] : [];
   const stockRows = data.stock as UnknownRecord[];
   const channelRows = data.channels as UnknownRecord[];
-  const salesRows = data.salesMetrics as UnknownRecord[];
+  const allSalesRows = data.salesMetrics as UnknownRecord[];
 
   return (
     <div className="mt-2 rounded-xl border border-slate-200 bg-white shadow-sm text-sm">
@@ -305,6 +341,33 @@ export function SkuDataTable({ data, session, onUpdate }: { data: SkuMetrics; se
           <button onClick={() => setError('')} className="text-red-500 hover:text-red-700 font-bold text-base line-height-1">×</button>
         </div>
       )}
+
+      {/* FBA / MFN Tab Navigation */}
+      <div className="border-b border-slate-200 px-4 pt-3">
+        <div className="flex gap-1">
+          <button
+            onClick={() => setFulfillmentTab('FBA')}
+            className={`px-4 py-2 text-xs font-bold uppercase tracking-wide rounded-t-lg transition ${
+              fulfillmentTab === 'FBA'
+                ? 'bg-emerald-700 text-white'
+                : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+            }`}
+          >
+            FBA (Fulfilled by Amazon)
+          </button>
+          <button
+            onClick={() => setFulfillmentTab('MFN')}
+            className={`px-4 py-2 text-xs font-bold uppercase tracking-wide rounded-t-lg transition ${
+              fulfillmentTab === 'MFN'
+                ? 'bg-slate-700 text-white'
+                : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+            }`}
+          >
+            MFN (Merchant Fulfilled)
+          </button>
+        </div>
+      </div>
+
       <div className="overflow-x-auto">
         <table className="w-full min-w-[900px] border-collapse text-left">
           <thead>
@@ -346,7 +409,7 @@ export function SkuDataTable({ data, session, onUpdate }: { data: SkuMetrics; se
           </thead>
 
           <tbody>
-            {/* Image + ASIN + Stock + Price rows */}
+            {/* Image + ASIN/Listing ID (clickable) + Stock + Price rows */}
             <tr>
               <td className={`${tdLeft} align-top`} rowSpan={5}>
                 {product.imageUrl ? (
@@ -361,12 +424,27 @@ export function SkuDataTable({ data, session, onUpdate }: { data: SkuMetrics; se
                   </div>
                 )}
               </td>
-              {channels.map((c) => (
-                <td key={c.name} className={td}>
-                  <span className="text-[10px] uppercase text-slate-400 tracking-wider block">Listing ID / ASIN</span>
-                  <span className="font-mono font-semibold text-slate-800">{c.data.asin}</span>
-                </td>
-              ))}
+              {channels.map((c) => {
+                const url = getMarketplaceUrl(c.ch, c.country, c.data.asin, c.data.listingId);
+                return (
+                  <td key={c.name} className={td}>
+                    <span className="text-[10px] uppercase text-slate-400 tracking-wider block">Listing ID / ASIN</span>
+                    {url ? (
+                      <a
+                        href={url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 font-mono font-semibold text-emerald-700 hover:text-emerald-900 hover:underline"
+                      >
+                        {c.data.asin}
+                        <ExternalLink className="size-3" />
+                      </a>
+                    ) : (
+                      <span className="font-mono font-semibold text-slate-800">{c.data.asin}</span>
+                    )}
+                  </td>
+                );
+              })}
             </tr>
             <tr className="bg-slate-50">
               {channels.map((c) => (
@@ -403,7 +481,7 @@ export function SkuDataTable({ data, session, onUpdate }: { data: SkuMetrics; se
 
             {/* Attributes + Sales Velocity Matrix */}
             {ATTRIBUTE_ROWS.map((row, i) => {
-              const salesRow = SALES_ROWS[i];
+              const salesRow = salesRows[i];
 
               let editContent = <span className="font-semibold text-slate-900">{attrValues[row.label] ?? 'N/A'}</span>;
 
@@ -440,7 +518,7 @@ export function SkuDataTable({ data, session, onUpdate }: { data: SkuMetrics; se
                       {salesRow ? (
                         <>
                           <span className="text-[10px] uppercase text-slate-400 tracking-wider block">{salesRow.label}</span>
-                          <span className="font-semibold text-slate-800">{c.data[salesRow.key]}</span>
+                          <span className="font-semibold text-slate-800">{(c.data as any)[salesRow.key]}</span>
                         </>
                       ) : (
                         <span className="text-slate-300">—</span>
@@ -467,12 +545,12 @@ export function SkuDataTable({ data, session, onUpdate }: { data: SkuMetrics; se
       <DetailTable
         title="All Pricing and Channel Data"
         rows={channelRows}
-        preferredColumns={['id', 'productId', 'channel', 'country', 'asin', 'listingId', 'price', 'currency', 'isActive', 'updatedAt']}
+        preferredColumns={['id', 'productId', 'channel', 'country', 'asin', 'listingId', 'price', 'fbaPrice', 'mfnPrice', 'currency', 'isActive', 'updatedAt']}
       />
       <DetailTable
         title="All Sales Data"
-        rows={salesRows}
-        preferredColumns={['id', 'productId', 'productChannelId', 'channel', 'country', 'periodStart', 'periodEnd', 'unitsSold', 'revenue', 'velocity', 'currency', 'createdAt', 'updatedAt']}
+        rows={allSalesRows}
+        preferredColumns={['id', 'productId', 'productChannelId', 'channel', 'country', 'fulfillmentType', 'periodStart', 'periodEnd', 'unitsSold', 'revenue', 'velocity', 'currency', 'createdAt', 'updatedAt']}
       />
     </div>
   );

@@ -58,7 +58,7 @@ export type PaginatedSkus = {
 export type ImportResult = Record<string, unknown>;
 
 export type DashboardMetrics = {
-  salesVelocity: { channel: string; fba: number; mfn: number }[];
+  salesVelocity: { channel: string; fulfillmentType?: string; fba: number; mfn: number }[];
   stockDistribution: { name: string; value: number; fill: string }[];
   revenueTrend: { month: string; revenue: number }[];
 };
