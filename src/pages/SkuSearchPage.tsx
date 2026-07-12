@@ -155,7 +155,7 @@ export function SkuSearchPage({ session }: { session: AuthSession }) {
                 <PackageSearch className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
                 <input 
                   className="h-11 w-full rounded-xl border border-slate-200 pl-9 pr-3 text-sm outline-none focus:ring-2 focus:ring-emerald-600" 
-                  placeholder="Type to search SKU or Title..." 
+                  placeholder="Search by SKU, Title, Brand, Category, or Material..." 
                   value={filters.q} 
                   onChange={(e) => setFilters({ ...filters, q: e.target.value })} 
                 />
