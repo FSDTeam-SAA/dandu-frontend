@@ -192,8 +192,8 @@ function getChannelData(metrics: SkuMetrics, channelName: string, country?: stri
   ) as any;
 
   return {
-    asin: channel?.asin ?? '-',
-    listingId: channel?.listingId ?? null,
+    asin: channel?.asin || null,
+    listingId: channel?.listingId || null,
     fbaQty: stockFBA?.available != null ? stockFBA.available.toLocaleString() : '-',
     mfnQty: stockMFN?.available != null ? stockMFN.available.toLocaleString() : '-',
     fbaPrice: formatCurrency(channel?.fbaPrice ?? channel?.price),
@@ -306,7 +306,13 @@ export function SkuDataTable({ data, session, onUpdate }: { data: SkuMetrics; se
     { name: 'DistinctAndUnique', ch: 'WEBSITE', country: undefined },
   ];
 
-  const channels = channelDefs.map((def) => ({
+  const matchedChannels = channelDefs.filter((def) =>
+    data.channels.some(
+      (c: any) => c.channel === def.ch && (!def.country || c.country === def.country),
+    ),
+  );
+
+  const channels = (matchedChannels.length > 0 ? matchedChannels : channelDefs.slice(0, 1)).map((def) => ({
     ...def,
     data: getChannelData(data, def.ch, def.country, fulfillmentTab),
   }));
@@ -436,11 +442,11 @@ export function SkuDataTable({ data, session, onUpdate }: { data: SkuMetrics; se
                         rel="noopener noreferrer"
                         className="inline-flex items-center gap-1 font-mono font-semibold text-emerald-700 hover:text-emerald-900 hover:underline"
                       >
-                        {c.data.asin}
+                        {c.data.asin || c.data.listingId || 'View'}
                         <ExternalLink className="size-3" />
                       </a>
                     ) : (
-                      <span className="font-mono font-semibold text-slate-800">{c.data.asin}</span>
+                      <span className="font-mono font-semibold text-slate-800">{c.data.asin || 'N/A'}</span>
                     )}
                   </td>
                 );
