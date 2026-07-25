@@ -591,6 +591,7 @@ export function SkuDataTable({ data, session, onUpdate }: { data: SkuMetrics; se
               ))}
             </tr>
             <tr className="bg-slate-50">
+              <td className={tdLeft}></td>
               {channels.map((channel) => (
                 <td key={channel.name} className={td}>
                   <span className="block text-[10px] uppercase tracking-wider text-slate-400">FBA Price</span>
@@ -601,6 +602,7 @@ export function SkuDataTable({ data, session, onUpdate }: { data: SkuMetrics; se
               ))}
             </tr>
             <tr>
+              <td className={tdLeft}></td>
               {channels.map((channel) => (
                 <td key={channel.name} className={td}>
                   <span className="block text-[10px] uppercase tracking-wider text-slate-400">MFN Price</span>
