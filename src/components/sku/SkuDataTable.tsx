@@ -320,6 +320,7 @@ const ATTRIBUTE_ROWS = [
 export function SkuDataTable({ data, session, onUpdate }: { data: SkuMetrics; session?: AuthSession; onUpdate?: () => void }) {
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState('');
   const product: any = data.product ?? {};
 
   const [editValues, setEditValues] = useState({
