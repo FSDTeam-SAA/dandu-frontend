@@ -611,8 +611,8 @@ export function SkuDataTable({ data, session, onUpdate }: { data: SkuMetrics; se
               ))}
             </tr>
 
+
             {ATTRIBUTE_ROWS.map((row, i) => {
-              const salesRow = salesRows[i];
               let editContent = <span className="font-semibold text-slate-900">{attrValues[row.label] ?? 'N/A'}</span>;
 
               if (isEditing) {
@@ -644,20 +644,31 @@ export function SkuDataTable({ data, session, onUpdate }: { data: SkuMetrics; se
                     </div>
                   </td>
                   {channels.map((channel) => (
-                    <td key={channel.name} className={td}>
-                      {salesRow ? (
-                        <>
-                          <span className="block text-[10px] uppercase tracking-wider text-slate-400">{salesRow.label}</span>
-                          <span className="font-semibold text-slate-800">{(channel.data as any)[salesRow.key]}</span>
-                        </>
-                      ) : (
-                        <span className="text-slate-300">-</span>
-                      )}
+                    <td key={channel.name} className={`${td} text-left`}>
+                      <span className="block text-[10px] uppercase tracking-wider text-slate-400">{channel.name}</span>
+                      <span className="text-[11px] font-semibold text-slate-500">{attrValues[row.label] ?? 'N/A'}</span>
                     </td>
                   ))}
                 </tr>
               );
             })}
+            <tr>
+              <td colSpan={channels.length + 1} className="border-b border-t border-slate-300 bg-slate-200 px-3 py-1.5">
+                <span className="text-[10px] font-black uppercase tracking-widest text-slate-600">Sales Data</span>
+              </td>
+            </tr>
+            {salesRows.map((row, i) => (
+              <tr key={row.key} className={i % 2 === 0 ? 'bg-slate-50 hover:bg-slate-100 transition-colors' : 'hover:bg-slate-50 transition-colors'}>
+                <td className={tdLeft}>
+                  <span className="text-[11px] font-bold uppercase tracking-wide text-slate-500">{row.label}</span>
+                </td>
+                {channels.map((channel) => (
+                  <td key={channel.name} className={td}>
+                    <span className="font-semibold text-slate-800">{(channel.data as any)[row.key]}</span>
+                  </td>
+                ))}
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>
