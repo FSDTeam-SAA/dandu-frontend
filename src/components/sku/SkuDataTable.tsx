@@ -113,6 +113,21 @@ function stockLocationType(row: any): 'FBA' | 'MFN' {
   return normalizeFulfillment(locationText) === 'FBA' ? 'FBA' : 'MFN';
 }
 
+function isLinnworksUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+}
+
+function isLinnworksInternalAsin(value: string): boolean {
+  return value.includes(':') || value.includes('|');
+}
+
+function cleanDisplayId(asin: string | null | undefined, listingId: string | null | undefined): string {
+  const id = asin && asin !== '-' ? asin : listingId && listingId !== '-' ? listingId : null;
+  if (!id) return '-';
+  if (isLinnworksInternalAsin(id) || isLinnworksUuid(id)) return '-';
+  return id;
+}
+
 function getMarketplaceUrl(
   channel: string,
   country: string | undefined,
@@ -120,17 +135,18 @@ function getMarketplaceUrl(
   listingId: string | null,
   productUrl?: string | null,
 ): string | null {
-  if (channel === 'AMAZON' && asin && asin !== '-') {
-    const domain = country === 'CA' ? 'amazon.ca' : 'amazon.com';
-    return `https://www.${domain}/dp/${asin}`;
+  if (channel === 'AMAZON') {
+    if (asin && asin !== '-' && !isLinnworksInternalAsin(asin)) {
+      const domain = country === 'CA' ? 'amazon.ca' : 'amazon.com';
+      return `https://www.${domain}/dp/${asin}`;
+    }
   }
   if (channel === 'EBAY') {
-    const ebayId = (listingId && listingId !== '-') ? listingId : (asin && asin !== '-' ? asin : null);
-    if (ebayId) return `https://www.ebay.com/itm/${ebayId}`;
+    const ebayItemNumber = asin && asin !== '-' && /^\d+$/.test(asin) ? asin : null;
+    if (ebayItemNumber) return `https://www.ebay.com/itm/${ebayItemNumber}`;
   }
   if (channel === 'WEBSITE') {
-    const candidate = productUrl || listingId || asin;
-    if (candidate && /^https?:\/\//i.test(candidate)) return candidate;
+    if (productUrl && /^https?:\/\//i.test(productUrl)) return productUrl;
   }
   return null;
 }
@@ -258,9 +274,20 @@ function sumSales(
 }
 
 function findChannel(metrics: SkuMetrics, channel: string, country?: string) {
-  return (metrics.channels as any[]).find((row) =>
+  const matches = (metrics.channels as any[]).filter((row) =>
     row.channel === channel && countryMatches(row.country, country),
-  ) as any | undefined;
+  );
+  if (matches.length === 0) return undefined;
+
+  const hasValidId = (row: any): boolean => {
+    const asin = row?.asin;
+    const listingId = row?.listingId;
+    if (asin && asin !== '-' && !isLinnworksInternalAsin(asin) && !isLinnworksUuid(asin)) return true;
+    if (listingId && listingId !== '-' && !isLinnworksUuid(listingId) && !isLinnworksInternalAsin(listingId)) return true;
+    return false;
+  };
+
+  return matches.find(hasValidId) ?? matches[0];
 }
 
 function getChannelData(metrics: SkuMetrics, channelName: string, country?: string) {
@@ -268,13 +295,16 @@ function getChannelData(metrics: SkuMetrics, channelName: string, country?: stri
   const stockFBA = stockQuantity(metrics, { country, fba: true, includeInbound: false });
   const stockMFN = stockQuantity(metrics, { country, fba: false, includeInbound: false });
 
+  const rawAsin = channel?.asin ?? null;
+  const displayAsin = rawAsin && !isLinnworksInternalAsin(rawAsin) && !isLinnworksUuid(rawAsin) ? rawAsin : '-';
+
   return {
-    asin: channel?.asin ?? channel?.listingId ?? '-',
+    asin: displayAsin,
     listingId: channel?.listingId ?? null,
     url: getMarketplaceUrl(
       channelName,
       country,
-      channel?.asin ?? null,
+      rawAsin,
       channel?.listingId ?? null,
       (metrics.product as any)?.productUrl ?? null,
     ),
@@ -320,6 +350,7 @@ const ATTRIBUTE_ROWS = [
 export function SkuDataTable({ data, session, onUpdate }: { data: SkuMetrics; session?: AuthSession; onUpdate?: () => void }) {
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState('');
   const product: any = data.product ?? {};
 
   const [editValues, setEditValues] = useState({
@@ -432,20 +463,20 @@ export function SkuDataTable({ data, session, onUpdate }: { data: SkuMetrics; se
     {
       label: 'CAFBA',
       stock: formatNumber(stockQuantity(data, { country: 'CA', fba: true, includeInbound: true })),
-      price: formatCurrency(amazonCa?.fbaPrice ?? amazonCa?.price ?? amazonCa?.mfnPrice),
+      price: formatCurrency(amazonCa?.fbaPrice ?? amazonCa?.price ?? amazonCa?.fbaPrice),
       asin: <ClickableValue value={amazonCa?.asin ?? '-'} url={getMarketplaceUrl('AMAZON', 'CA', amazonCa?.asin ?? null, amazonCa?.listingId ?? null)} />,
     },
     {
       label: 'EBAY',
       stock: '-',
       price: formatCurrency(ebay?.price ?? ebay?.mfnPrice ?? ebay?.fbaPrice),
-      asin: <ClickableValue value={ebay?.asin ?? ebay?.listingId ?? '-'} url={getMarketplaceUrl('EBAY', ebay?.country ?? undefined, ebay?.asin ?? null, ebay?.listingId ?? null)} />,
+      asin: <ClickableValue value={cleanDisplayId(ebay?.asin, ebay?.listingId)} url={getMarketplaceUrl('EBAY', ebay?.country ?? undefined, ebay?.asin ?? null, ebay?.listingId ?? null)} />,
     },
     {
       label: 'D&U',
       stock: '-',
       price: formatCurrency(website?.price ?? website?.mfnPrice ?? website?.fbaPrice),
-      asin: <ClickableValue value={website?.asin ?? website?.listingId ?? '-'} url={getMarketplaceUrl('WEBSITE', website?.country ?? undefined, website?.asin ?? null, website?.listingId ?? null, (data.product as any)?.productUrl ?? null)} />,
+      asin: <ClickableValue value={cleanDisplayId(website?.asin, website?.listingId)} url={getMarketplaceUrl('WEBSITE', website?.country ?? undefined, website?.asin ?? null, website?.listingId ?? null, (data.product as any)?.productUrl ?? null)} />,
     },
   ];
 
@@ -590,6 +621,7 @@ export function SkuDataTable({ data, session, onUpdate }: { data: SkuMetrics; se
               ))}
             </tr>
             <tr className="bg-slate-50">
+              <td className={tdLeft}></td>
               {channels.map((channel) => (
                 <td key={channel.name} className={td}>
                   <span className="block text-[10px] uppercase tracking-wider text-slate-400">FBA Price</span>
@@ -600,6 +632,7 @@ export function SkuDataTable({ data, session, onUpdate }: { data: SkuMetrics; se
               ))}
             </tr>
             <tr>
+              <td className={tdLeft}></td>
               {channels.map((channel) => (
                 <td key={channel.name} className={td}>
                   <span className="block text-[10px] uppercase tracking-wider text-slate-400">MFN Price</span>
@@ -610,8 +643,8 @@ export function SkuDataTable({ data, session, onUpdate }: { data: SkuMetrics; se
               ))}
             </tr>
 
+
             {ATTRIBUTE_ROWS.map((row, i) => {
-              const salesRow = salesRows[i];
               let editContent = <span className="font-semibold text-slate-900">{attrValues[row.label] ?? 'N/A'}</span>;
 
               if (isEditing) {
@@ -643,20 +676,31 @@ export function SkuDataTable({ data, session, onUpdate }: { data: SkuMetrics; se
                     </div>
                   </td>
                   {channels.map((channel) => (
-                    <td key={channel.name} className={td}>
-                      {salesRow ? (
-                        <>
-                          <span className="block text-[10px] uppercase tracking-wider text-slate-400">{salesRow.label}</span>
-                          <span className="font-semibold text-slate-800">{(channel.data as any)[salesRow.key]}</span>
-                        </>
-                      ) : (
-                        <span className="text-slate-300">-</span>
-                      )}
+                    <td key={channel.name} className={`${td} text-left`}>
+                      <span className="block text-[10px] uppercase tracking-wider text-slate-400">{channel.name}</span>
+                      <span className="text-[11px] font-semibold text-slate-500">{attrValues[row.label] ?? 'N/A'}</span>
                     </td>
                   ))}
                 </tr>
               );
             })}
+            <tr>
+              <td colSpan={channels.length + 1} className="border-b border-t border-slate-300 bg-slate-200 px-3 py-1.5">
+                <span className="text-[10px] font-black uppercase tracking-widest text-slate-600">Sales Data</span>
+              </td>
+            </tr>
+            {salesRows.map((row, i) => (
+              <tr key={row.key} className={i % 2 === 0 ? 'bg-slate-50 hover:bg-slate-100 transition-colors' : 'hover:bg-slate-50 transition-colors'}>
+                <td className={tdLeft}>
+                  <span className="text-[11px] font-bold uppercase tracking-wide text-slate-500">{row.label}</span>
+                </td>
+                {channels.map((channel) => (
+                  <td key={channel.name} className={td}>
+                    <span className="font-semibold text-slate-800">{(channel.data as any)[row.key]}</span>
+                  </td>
+                ))}
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>
