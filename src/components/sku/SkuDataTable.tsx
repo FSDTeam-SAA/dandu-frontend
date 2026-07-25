@@ -4,7 +4,6 @@ import { Pencil, Check, X, Loader2, ExternalLink } from 'lucide-react';
 import { authApi, AuthSession, SkuMetrics } from '../../lib/authApi';
 
 type UnknownRecord = Record<string, unknown>;
-type FulfillmentTab = 'FBA' | 'MFN';
 
 function formatCurrency(value: string | number | null | undefined): string {
   if (value == null) return '-';
@@ -316,28 +315,11 @@ const ATTRIBUTE_ROWS = [
   { label: 'PACK QTY' },
 ] as const;
 
-function getSalesRowsForTab(tab: FulfillmentTab): { label: string; key: string }[] {
-  if (tab === 'FBA') {
-    return [
-      { label: '7-Day FBA Sales (units)', key: 'salesFBA7' },
-      { label: '30-Day FBA Sales (units)', key: 'salesFBA30' },
-      { label: '90-Day FBA Sales (units)', key: 'salesFBA90' },
-      { label: '365-Day FBA Sales (units)', key: 'salesFBA365' },
-    ];
-  }
-  return [
-    { label: '7-Day MFN Sales (units)', key: 'salesMFN7' },
-    { label: '30-Day MFN Sales (units)', key: 'salesMFN30' },
-    { label: '90-Day MFN Sales (units)', key: 'salesMFN90' },
-    { label: '365-Day MFN Sales (units)', key: 'salesMFN365' },
-  ];
-}
+
 
 export function SkuDataTable({ data, session, onUpdate }: { data: SkuMetrics; session?: AuthSession; onUpdate?: () => void }) {
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [error, setError] = useState('');
-  const [fulfillmentTab, setFulfillmentTab] = useState<FulfillmentTab>('FBA');
   const product: any = data.product ?? {};
 
   const [editValues, setEditValues] = useState({
@@ -406,9 +388,16 @@ export function SkuDataTable({ data, session, onUpdate }: { data: SkuMetrics; se
     data: getChannelData(data, def.ch, def.country),
   }));
 
-  const salesRows = getSalesRowsForTab(fulfillmentTab);
-  const selectedStockKey = fulfillmentTab === 'FBA' ? 'fbaQty' : 'mfnQty';
-  const selectedPriceKey = fulfillmentTab === 'FBA' ? 'fbaPrice' : 'mfnPrice';
+  const salesRows = [
+    { label: '7-Day FBA Sales (units)', key: 'salesFBA7' },
+    { label: '7-Day MFN Sales (units)', key: 'salesMFN7' },
+    { label: '30-Day FBA Sales (units)', key: 'salesFBA30' },
+    { label: '30-Day MFN Sales (units)', key: 'salesMFN30' },
+    { label: '90-Day FBA Sales (units)', key: 'salesFBA90' },
+    { label: '90-Day MFN Sales (units)', key: 'salesMFN90' },
+    { label: '365-Day FBA Sales (units)', key: 'salesFBA365' },
+    { label: '365-Day MFN Sales (units)', key: 'salesMFN365' },
+  ];
 
   const requiredOverviewRows: {
     label: string;
@@ -520,30 +509,7 @@ export function SkuDataTable({ data, session, onUpdate }: { data: SkuMetrics; se
         </div>
       )}
 
-      <div className="border-b border-slate-200 px-4 pt-3">
-        <div className="flex gap-1">
-          <button
-            onClick={() => setFulfillmentTab('FBA')}
-            className={`px-4 py-2 text-xs font-bold uppercase tracking-wide rounded-t-lg transition ${
-              fulfillmentTab === 'FBA'
-                ? 'bg-emerald-700 text-white'
-                : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
-            }`}
-          >
-            FBA (Fulfilled by Amazon)
-          </button>
-          <button
-            onClick={() => setFulfillmentTab('MFN')}
-            className={`px-4 py-2 text-xs font-bold uppercase tracking-wide rounded-t-lg transition ${
-              fulfillmentTab === 'MFN'
-                ? 'bg-slate-700 text-white'
-                : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
-            }`}
-          >
-            MFN (Merchant Fulfilled)
-          </button>
-        </div>
-      </div>
+
 
       <div className="overflow-x-auto">
         <table className="w-full min-w-[900px] border-collapse text-left">
@@ -610,17 +576,35 @@ export function SkuDataTable({ data, session, onUpdate }: { data: SkuMetrics; se
             <tr className="bg-slate-50">
               {channels.map((channel) => (
                 <td key={channel.name} className={td}>
-                  <span className="block text-[10px] uppercase tracking-wider text-slate-400">{fulfillmentTab} Stock</span>
-                  <span className="font-semibold text-slate-800">{(channel.data as any)[selectedStockKey]}</span>
+                  <span className="block text-[10px] uppercase tracking-wider text-slate-400">FBA Stock</span>
+                  <span className="font-semibold text-slate-800">{(channel.data as any)['fbaQty']}</span>
                 </td>
               ))}
             </tr>
             <tr>
               {channels.map((channel) => (
                 <td key={channel.name} className={td}>
-                  <span className="block text-[10px] uppercase tracking-wider text-slate-400">{fulfillmentTab} Price</span>
-                  <span className={fulfillmentTab === 'FBA' ? 'font-bold text-emerald-700' : 'font-bold text-slate-700'}>
-                    {(channel.data as any)[selectedPriceKey]}
+                  <span className="block text-[10px] uppercase tracking-wider text-slate-400">MFN Stock</span>
+                  <span className="font-semibold text-slate-800">{(channel.data as any)['mfnQty']}</span>
+                </td>
+              ))}
+            </tr>
+            <tr className="bg-slate-50">
+              {channels.map((channel) => (
+                <td key={channel.name} className={td}>
+                  <span className="block text-[10px] uppercase tracking-wider text-slate-400">FBA Price</span>
+                  <span className="font-bold text-emerald-700">
+                    {(channel.data as any)['fbaPrice']}
+                  </span>
+                </td>
+              ))}
+            </tr>
+            <tr>
+              {channels.map((channel) => (
+                <td key={channel.name} className={td}>
+                  <span className="block text-[10px] uppercase tracking-wider text-slate-400">MFN Price</span>
+                  <span className="font-bold text-slate-700">
+                    {(channel.data as any)['mfnPrice']}
                   </span>
                 </td>
               ))}
