@@ -102,6 +102,23 @@ function normalizeFulfillment(value: unknown): 'FBA' | 'MFN' | 'ALL' {
   return 'ALL';
 }
 
+function normalizeChannel(value: unknown): string {
+  const normalized = String(value ?? '').trim().toUpperCase();
+  if (normalized.includes('AMAZON')) return 'AMAZON';
+  if (normalized.includes('EBAY')) return 'EBAY';
+  if (normalized.includes('WALMART')) return 'WALMART';
+  if (normalized.includes('SHOPIFY')) return 'SHOPIFY';
+  if (
+    normalized.includes('WEBSITE') ||
+    normalized.includes('DANDU') ||
+    normalized.includes('DISTINCT') ||
+    normalized.includes('BIGCOMMERCE')
+  ) {
+    return 'WEBSITE';
+  }
+  return normalized || 'OTHER';
+}
+
 function stockLocationType(row: any): 'FBA' | 'MFN' {
   const locationText = [
     row.locationType,
@@ -228,10 +245,23 @@ function DetailTable({
   );
 }
 
-function periodDays(row: any): number {
+function periodDays(row: any): number | null {
+  const explicitDays = asNumber(row.periodDays ?? row.days ?? row.windowDays);
+  if (explicitDays > 0) return explicitDays;
+
+  const periodLabel = String(row.period ?? row.window ?? row.label ?? '').match(/\d+/);
+  if (periodLabel) return Number(periodLabel[0]);
+
   const start = new Date(row.periodStart).getTime();
   const end = new Date(row.periodEnd).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
   return Math.round((end - start) / (1000 * 60 * 60 * 24));
+}
+
+function salesPeriodMatches(metric: any, targetDays: number): boolean {
+  const days = periodDays(metric);
+  if (days == null) return false;
+  return days === targetDays || days + 1 === targetDays;
 }
 
 function getSalesForPeriod(
@@ -247,7 +277,7 @@ function getSalesForPeriod(
     fulfillmentType: fulfillmentType === 'ALL' ? undefined : fulfillmentType,
     days: targetDays,
   });
-  return value > 0 ? value.toLocaleString() : '-';
+  return formatNumber(value);
 }
 
 function sumSales(
@@ -261,14 +291,14 @@ function sumSales(
 ): number {
   return (metrics.salesMetrics as any[])
     .filter((metric) => {
-      if (options.channel && metric.channel !== options.channel) return false;
+      if (options.channel && normalizeChannel(metric.channel) !== normalizeChannel(options.channel)) return false;
       if (!countryMatches(metric.country, options.country)) return false;
       const metricFulfillment = normalizeFulfillment(metric.fulfillmentType);
       if (options.fulfillmentType && metricFulfillment !== options.fulfillmentType) {
         const unknownMerchantSale = metricFulfillment === 'ALL' && options.fulfillmentType === 'MFN';
         if (!unknownMerchantSale) return false;
       }
-      return periodDays(metric) === options.days;
+      return salesPeriodMatches(metric, options.days);
     })
     .reduce((sum, metric) => sum + asNumber(metric.unitsSold), 0);
 }
