@@ -82,11 +82,27 @@ export function SkuSearchPage({ session }: { session: AuthSession }) {
   const refreshSelectedSku = async () => {
     if (!selectedSku) return;
     setRefreshingSku(true);
+    setError('');
     try {
       const response = await authApi.searchSku(session.accessToken, selectedSku.sku);
       setSelectedSku(response.data);
-    } catch {
-      // silently fail on refresh
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to refresh SKU data');
+    } finally {
+      setRefreshingSku(false);
+    }
+  };
+
+  const openSkuDetails = async (item: SkuMetrics) => {
+    setSelectedSku(item);
+    setRefreshingSku(true);
+    setError('');
+
+    try {
+      const response = await authApi.searchSku(session.accessToken, item.sku);
+      setSelectedSku(response.data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to refresh SKU data');
     } finally {
       setRefreshingSku(false);
     }
@@ -121,7 +137,9 @@ export function SkuSearchPage({ session }: { session: AuthSession }) {
           </button>
           <div className="flex-1">
             <h2 className="text-xl font-black tracking-tight text-slate-900">{selectedSku.sku}</h2>
-            <div className="text-sm text-slate-500">Detailed Metrics View</div>
+            <div className="text-sm text-slate-500">
+              {refreshingSku ? 'Refreshing Linnworks data...' : 'Detailed Metrics View'}
+            </div>
           </div>
           <button
             onClick={refreshSelectedSku}
@@ -133,6 +151,7 @@ export function SkuSearchPage({ session }: { session: AuthSession }) {
             Refresh SKU
           </button>
         </div>
+        {error ? <InlineError text={error} /> : null}
         <Panel title="SKU Details">
           <SkuDataTable data={selectedSku} session={session} onUpdate={refreshSelectedSku} />
         </Panel>
@@ -284,7 +303,7 @@ export function SkuSearchPage({ session }: { session: AuthSession }) {
                       }}
                     >
                       <button
-                        onClick={() => setSelectedSku(item)}
+                        onClick={() => openSkuDetails(item)}
                         className="flex w-full h-full items-center gap-4 rounded-2xl border border-slate-200 bg-white p-3 text-left transition hover:border-emerald-400 hover:shadow-sm"
                       >
                         {/* Thumb */}
