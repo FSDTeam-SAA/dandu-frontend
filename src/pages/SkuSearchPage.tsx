@@ -138,7 +138,7 @@ export function SkuSearchPage({ session }: { session: AuthSession }) {
           <div className="flex-1">
             <h2 className="text-xl font-black tracking-tight text-slate-900">{selectedSku.sku}</h2>
             <div className="text-sm text-slate-500">
-              {refreshingSku ? 'Refreshing Linnworks data...' : 'Detailed Metrics View'}
+              {refreshingSku ? 'Loading latest saved SKU data...' : 'Detailed Metrics View'}
             </div>
           </div>
           <button
