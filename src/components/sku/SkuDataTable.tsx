@@ -264,31 +264,22 @@ function salesPeriodMatches(metric: any, targetDays: number): boolean {
   return days === targetDays || days + 1 === targetDays;
 }
 
-function getSalesForPeriod(
-  metrics: SkuMetrics,
-  channelName: string,
-  country: string | undefined,
-  targetDays: number,
-  fulfillmentType?: 'FBA' | 'MFN' | 'ALL',
-): string {
-  const value = sumSales(metrics, {
-    channel: channelName,
-    country,
-    fulfillmentType: fulfillmentType === 'ALL' ? undefined : fulfillmentType,
-    days: targetDays,
-  });
-  return formatNumber(value);
-}
+type SalesQuery = {
+  channel?: string;
+  country?: string;
+  fulfillmentType?: 'FBA' | 'MFN';
+  days: number;
+};
 
-function sumSales(
+type SalesValue = {
+  display: string;
+  description: string;
+};
+
+function matchingSalesMetrics(
   metrics: SkuMetrics,
-  options: {
-    channel?: string;
-    country?: string;
-    fulfillmentType?: 'FBA' | 'MFN';
-    days: number;
-  },
-): number {
+  options: SalesQuery,
+): any[] {
   return (metrics.salesMetrics as any[])
     .filter((metric) => {
       if (options.channel && normalizeChannel(metric.channel) !== normalizeChannel(options.channel)) return false;
@@ -299,8 +290,31 @@ function sumSales(
         if (!unknownMerchantSale) return false;
       }
       return salesPeriodMatches(metric, options.days);
-    })
+    });
+}
+
+function sumSales(metrics: SkuMetrics, options: SalesQuery): number {
+  return matchingSalesMetrics(metrics, options)
     .reduce((sum, metric) => sum + asNumber(metric.unitsSold), 0);
+}
+
+function getSalesValue(metrics: SkuMetrics, options: SalesQuery): SalesValue {
+  const matches = matchingSalesMetrics(metrics, options);
+  const period = `${options.days}-day`;
+  const marketplace = options.channel ? normalizeChannel(options.channel) : 'all marketplaces';
+
+  if (matches.length === 0) {
+    return {
+      display: '-',
+      description: `No ${period} sales data is available for ${marketplace}.`,
+    };
+  }
+
+  const unitsSold = matches.reduce((sum, metric) => sum + asNumber(metric.unitsSold), 0);
+  return {
+    display: formatNumber(unitsSold),
+    description: `${formatNumber(unitsSold)} units sold in the last ${options.days} days for ${marketplace}.`,
+  };
 }
 
 function findChannel(metrics: SkuMetrics, channel: string, country?: string) {
@@ -342,15 +356,43 @@ function getChannelData(metrics: SkuMetrics, channelName: string, country?: stri
     mfnQty: stockMFN > 0 ? stockMFN.toLocaleString() : '-',
     fbaPrice: formatCurrency(channel?.fbaPrice ?? channel?.price ?? channel?.mfnPrice),
     mfnPrice: formatCurrency(channel?.mfnPrice ?? channel?.price ?? channel?.fbaPrice),
-    salesFBA7: getSalesForPeriod(metrics, channelName, country, 7, 'FBA'),
-    salesFBA30: getSalesForPeriod(metrics, channelName, country, 30, 'FBA'),
-    salesFBA90: getSalesForPeriod(metrics, channelName, country, 90, 'FBA'),
-    salesFBA365: getSalesForPeriod(metrics, channelName, country, 365, 'FBA'),
-    salesMFN7: getSalesForPeriod(metrics, channelName, country, 7, 'MFN'),
-    salesMFN30: getSalesForPeriod(metrics, channelName, country, 30, 'MFN'),
-    salesMFN90: getSalesForPeriod(metrics, channelName, country, 90, 'MFN'),
-    salesMFN365: getSalesForPeriod(metrics, channelName, country, 365, 'MFN'),
   };
+}
+
+function SalesMetric({ value, label }: { value: SalesValue; label: string }) {
+  return (
+    <span className="inline-flex items-baseline gap-1" aria-label={`${label}: ${value.description}`} title={value.description}>
+      <span className="text-[10px] font-bold uppercase tracking-wide text-slate-400">{label}</span>
+      <span className="font-semibold tabular-nums text-slate-800">{value.display}</span>
+    </span>
+  );
+}
+
+function SalesDataCell({
+  metrics,
+  channel,
+  country,
+  days,
+}: {
+  metrics: SkuMetrics;
+  channel: string;
+  country?: string;
+  days: number;
+}) {
+  if (channel === 'AMAZON') {
+    const fba = getSalesValue(metrics, { channel, country, fulfillmentType: 'FBA', days });
+    const mfn = getSalesValue(metrics, { channel, country, fulfillmentType: 'MFN', days });
+
+    return (
+      <div className="flex flex-col items-center gap-1">
+        <SalesMetric label="FBA" value={fba} />
+        <SalesMetric label="MFN" value={mfn} />
+      </div>
+    );
+  }
+
+  const total = getSalesValue(metrics, { channel, country, days });
+  return <SalesMetric label="Total" value={total} />;
 }
 
 function stockQuantity(metrics: SkuMetrics, options: { country?: string; fba?: boolean; includeInbound?: boolean }): number {
@@ -450,14 +492,10 @@ export function SkuDataTable({ data, session, onUpdate }: { data: SkuMetrics; se
   }));
 
   const salesRows = [
-    { label: '7-Day FBA Sales (units)', key: 'salesFBA7' },
-    { label: '7-Day MFN Sales (units)', key: 'salesMFN7' },
-    { label: '30-Day FBA Sales (units)', key: 'salesFBA30' },
-    { label: '30-Day MFN Sales (units)', key: 'salesMFN30' },
-    { label: '90-Day FBA Sales (units)', key: 'salesFBA90' },
-    { label: '90-Day MFN Sales (units)', key: 'salesMFN90' },
-    { label: '365-Day FBA Sales (units)', key: 'salesFBA365' },
-    { label: '365-Day MFN Sales (units)', key: 'salesMFN365' },
+    { label: '7-Day Sales (units)', days: 7 },
+    { label: '30-Day Sales (units)', days: 30 },
+    { label: '90-Day Sales (units)', days: 90 },
+    { label: '365-Day Sales (units)', days: 365 },
   ];
 
   const requiredOverviewRows: {
@@ -720,13 +758,18 @@ export function SkuDataTable({ data, session, onUpdate }: { data: SkuMetrics; se
               </td>
             </tr>
             {salesRows.map((row, i) => (
-              <tr key={row.key} className={i % 2 === 0 ? 'bg-slate-50 hover:bg-slate-100 transition-colors' : 'hover:bg-slate-50 transition-colors'}>
+              <tr key={row.days} className={i % 2 === 0 ? 'bg-slate-50 hover:bg-slate-100 transition-colors' : 'hover:bg-slate-50 transition-colors'}>
                 <td className={tdLeft}>
                   <span className="text-[11px] font-bold uppercase tracking-wide text-slate-500">{row.label}</span>
                 </td>
                 {channels.map((channel) => (
                   <td key={channel.name} className={td}>
-                    <span className="font-semibold text-slate-800">{(channel.data as any)[row.key]}</span>
+                    <SalesDataCell
+                      metrics={data}
+                      channel={channel.ch}
+                      country={channel.country}
+                      days={row.days}
+                    />
                   </td>
                 ))}
               </tr>
