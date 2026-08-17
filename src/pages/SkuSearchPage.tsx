@@ -1,7 +1,8 @@
-import { useEffect, useState, useRef } from 'react';
+import { useCallback, useEffect, useState, useRef } from 'react';
 import { ArrowLeft, Loader2, PackageSearch, RefreshCw } from 'lucide-react';
 import { Empty, InlineError, Panel } from '../components/ui';
-import { authApi, AuthSession, SkuFilterParams, SkuMetrics } from '../lib/authApi';
+import { authApi, AuthSession, getErrorMessage, SkuFilterParams, SkuMetrics } from '../lib/authApi';
+import { toFiniteNumber } from '../lib/dataValues';
 import { SkuDataTable } from '../components/sku/SkuDataTable';
 import { RestockCalculator } from '../components/sku/RestockCalculator';
 import { ProfitCalculator } from '../components/sku/ProfitCalculator';
@@ -24,6 +25,7 @@ export function SkuSearchPage({ session }: { session: AuthSession }) {
   const [refreshingSku, setRefreshingSku] = useState(false);
 
   const parentRef = useRef<HTMLDivElement>(null);
+  const activeCatalogRequest = useRef<AbortController | null>(null);
 
   // Debounce the text search
   useEffect(() => {
@@ -33,13 +35,16 @@ export function SkuSearchPage({ session }: { session: AuthSession }) {
     return () => clearTimeout(handler);
   }, [filters]);
 
-  const fetchSkus = async (appliedFilters: SkuFilterParams, cursor?: string) => {
+  const fetchSkus = useCallback(async (appliedFilters: SkuFilterParams, cursor?: string) => {
+    activeCatalogRequest.current?.abort();
+    const controller = new AbortController();
+    activeCatalogRequest.current = controller;
     setError('');
     if (cursor) setLoadingMore(true);
     else setLoading(true);
 
     try {
-      const response = await authApi.browseSkus(session.accessToken, appliedFilters, cursor);
+      const response = await authApi.browseSkus(session.accessToken, appliedFilters, cursor, 10, controller.signal);
       if (cursor) {
         setItems(prev => [...prev, ...response.data.items]);
       } else {
@@ -47,21 +52,21 @@ export function SkuSearchPage({ session }: { session: AuthSession }) {
       }
       setNextCursor(response.data.nextCursor);
       setTotal(response.data.total);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to fetch SKUs');
+    } catch (requestError) {
+      if (!controller.signal.aborted) setError(getErrorMessage(requestError, 'Failed to fetch SKUs'));
     } finally {
-      setLoading(false);
-      setLoadingMore(false);
+      if (!controller.signal.aborted) {
+        setLoading(false);
+        setLoadingMore(false);
+      }
     }
-  };
+  }, [session.accessToken]);
 
   // Fetch when activeFilters change
   useEffect(() => {
-    let mounted = true;
-    if (mounted) fetchSkus(activeFilters);
-    return () => { mounted = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeFilters]);
+    void fetchSkus(activeFilters);
+    return () => activeCatalogRequest.current?.abort();
+  }, [activeFilters, fetchSkus]);
 
   const loadMore = () => {
     if (nextCursor && !loadingMore) {
@@ -86,8 +91,8 @@ export function SkuSearchPage({ session }: { session: AuthSession }) {
     try {
       const response = await authApi.searchSku(session.accessToken, selectedSku.sku);
       setSelectedSku(response.data);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to refresh SKU data');
+    } catch (requestError) {
+      setError(getErrorMessage(requestError, 'Failed to refresh SKU data'));
     } finally {
       setRefreshingSku(false);
     }
@@ -101,8 +106,8 @@ export function SkuSearchPage({ session }: { session: AuthSession }) {
     try {
       const response = await authApi.searchSku(session.accessToken, item.sku);
       setSelectedSku(response.data);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to refresh SKU data');
+    } catch (requestError) {
+      setError(getErrorMessage(requestError, 'Failed to refresh SKU data'));
     } finally {
       setRefreshingSku(false);
     }
@@ -115,11 +120,16 @@ export function SkuSearchPage({ session }: { session: AuthSession }) {
 
     try {
       const response = await authApi.refreshInventory(session.accessToken);
-      setRefreshMessage(
-        `Inventory refresh queued. Job ${response.data.jobId ?? 'pending'} is running in the background.`,
-      );
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to refresh inventory');
+      if (response.data.status === 'QUEUED') {
+        setRefreshMessage(`Inventory refresh accepted. Job ID: ${response.data.jobId ?? 'not supplied by API'}. No completion status is available yet.`);
+      } else if (response.data.status === 'COMPLETED') {
+        setRefreshMessage(`Inventory refresh completed: ${response.data.updatedSkus} SKUs updated, ${response.data.deletedSkus} deleted, and ${response.data.remainingSkuCount} remain.`);
+        void fetchSkus(activeFilters);
+      } else {
+        setError(response.data.errorMessage || 'The inventory refresh API reported a failure.');
+      }
+    } catch (requestError) {
+      setError(getErrorMessage(requestError, 'Failed to refresh inventory'));
     } finally {
       setRefreshingInventory(false);
     }
@@ -173,7 +183,7 @@ export function SkuSearchPage({ session }: { session: AuthSession }) {
                 <PackageSearch className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
                 <input 
                   className="h-11 w-full rounded-xl border border-slate-200 pl-9 pr-3 text-sm outline-none focus:ring-2 focus:ring-emerald-600" 
-                  placeholder="Search by SKU, Title, Brand, Category, or Material..." 
+                  placeholder="Search by SKU, title, or brand..."
                   value={filters.q} 
                   onChange={(e) => setFilters({ ...filters, q: e.target.value })} 
                 />
@@ -185,7 +195,7 @@ export function SkuSearchPage({ session }: { session: AuthSession }) {
               <select 
                 className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-emerald-600"
                 value={filters.stockStatus}
-                onChange={(e) => setFilters({ ...filters, stockStatus: e.target.value as any })}
+                onChange={(e) => setFilters({ ...filters, stockStatus: e.target.value as SkuFilterParams['stockStatus'] })}
               >
                 <option value="ALL">All Status</option>
                 <option value="IN_STOCK">In Stock</option>
@@ -199,7 +209,7 @@ export function SkuSearchPage({ session }: { session: AuthSession }) {
               <select 
                 className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-emerald-600"
                 value={filters.channel}
-                onChange={(e) => setFilters({ ...filters, channel: e.target.value as any })}
+                onChange={(e) => setFilters({ ...filters, channel: e.target.value as SkuFilterParams['channel'] })}
               >
                 <option value="ALL">All Channels</option>
                 <option value="AMAZON">Amazon</option>
@@ -284,8 +294,8 @@ export function SkuSearchPage({ session }: { session: AuthSession }) {
                   }
 
                   const item = items[virtualRow.index];
-                  const product: any = item.product || {};
-                  const totalStock = item.stock.reduce((sum, s: any) => sum + (s.available || 0), 0);
+                  const product = item.product;
+                  const totalStock = item.stock.reduce((sum, stock) => sum + (toFiniteNumber(stock.available) ?? 0), 0);
                   const isLowStock = totalStock > 0 && totalStock <= 50;
                   const isOutOfStock = totalStock === 0;
 
@@ -308,7 +318,7 @@ export function SkuSearchPage({ session }: { session: AuthSession }) {
                       >
                         {/* Thumb */}
                         <div className="size-16 shrink-0 overflow-hidden rounded-xl border border-slate-100 bg-slate-50">
-                          {product.imageUrl ? (
+                          {typeof product?.imageUrl === 'string' && product.imageUrl ? (
                             <img src={product.imageUrl} alt="" className="size-full object-cover" />
                           ) : (
                             <div className="flex size-full items-center justify-center text-[10px] text-slate-400">No Img</div>
@@ -322,7 +332,7 @@ export function SkuSearchPage({ session }: { session: AuthSession }) {
                             {isOutOfStock && <span className="rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-bold uppercase text-red-700">Out of Stock</span>}
                             {isLowStock && <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold uppercase text-amber-700">Low Stock</span>}
                           </div>
-                          <div className="truncate text-sm font-medium text-slate-900">{product.title}</div>
+                          <div className="truncate text-sm font-medium text-slate-900">{product?.title || 'Untitled SKU'}</div>
                           <div className="mt-1 flex items-center gap-3 text-xs text-slate-500">
                             <span>Stock: <strong className="text-slate-700">{totalStock}</strong></span>
                             <span>Channels: <strong className="text-slate-700">{item.channels.length}</strong></span>
