@@ -1,36 +1,66 @@
 import { useState } from 'react';
 import type { ReactNode } from 'react';
-import { Pencil, Check, X, Loader2, ExternalLink } from 'lucide-react';
-import { authApi, AuthSession, SkuMetrics } from '../../lib/authApi';
+import { Check, ExternalLink, Loader2, Pencil, X } from 'lucide-react';
+import {
+  authApi,
+  type AuthSession,
+  type SkuMetrics,
+  type SkuProduct,
+} from '../../lib/authApi';
+import {
+  buildSkuComparison,
+  PRIMARY_TABLE_HEADERS,
+  PRIMARY_TABLE_SECTIONS,
+  type MarketplaceComparisonColumn,
+  type MarketplaceIdentifier,
+  type PrimaryTableRow,
+  type ProductFieldKey,
+} from './skuComparison';
 
 type UnknownRecord = Record<string, unknown>;
 
-function formatCurrency(value: string | number | null | undefined): string {
-  if (value == null) return '-';
-  const num = typeof value === 'string' ? parseFloat(value) : value;
-  if (isNaN(num)) return '-';
-  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(num);
+type EditValues = {
+  cost: string | number;
+  weight: string | number;
+  length: string | number;
+  width: string | number;
+  height: string | number;
+  material: string;
+  thickness: string;
+  packQty: string | number;
+};
+
+function asFiniteNumber(value: unknown): number | null {
+  if (value == null || value === '') return null;
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
-function formatNumber(value: string | number | null | undefined): string {
-  if (value == null) return '-';
-  const num = typeof value === 'string' ? parseFloat(value) : value;
-  if (isNaN(num)) return '-';
-  return num.toLocaleString();
+function formatCurrency(value: unknown): string {
+  const number = asFiniteNumber(value);
+  return number === null
+    ? '—'
+    : new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(number);
 }
 
-function formatWeight(value: string | number | null | undefined): string {
-  if (value == null) return '-';
-  const ounces = typeof value === 'string' ? parseFloat(value) : value;
-  if (isNaN(ounces)) return '-';
+function formatNumber(value: unknown): string {
+  const number = asFiniteNumber(value);
+  return number === null ? '—' : number.toLocaleString();
+}
 
-  const pounds = ounces / 16;
-  const kilograms = ounces * 0.0283495;
-  return `${ounces.toLocaleString(undefined, { maximumFractionDigits: 3 })} oz / ${pounds.toLocaleString(undefined, { maximumFractionDigits: 3 })} lb / ${kilograms.toLocaleString(undefined, { maximumFractionDigits: 3 })} kg`;
+function formatWeight(value: unknown): string {
+  const ounces = asFiniteNumber(value);
+  if (ounces === null) return '—';
+  const options = { maximumFractionDigits: 3 };
+  return [
+    ounces.toLocaleString(undefined, options) + ' oz',
+    (ounces / 16).toLocaleString(undefined, options) + ' lb',
+    (ounces * 0.0283495).toLocaleString(undefined, options) + ' kg',
+  ].join(' / ');
 }
 
 function formatDetailValue(value: unknown): string {
-  if (value == null || value === '') return '-';
+  if (value == null || value === '') return '—';
   if (typeof value === 'boolean') return value ? 'Yes' : 'No';
   if (typeof value === 'number') return value.toLocaleString();
   if (value instanceof Date) return value.toLocaleString();
@@ -48,7 +78,7 @@ function humanizeKey(key: string): string {
   return key
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
     .replace(/_/g, ' ')
-    .replace(/\b\w/g, (char) => char.toUpperCase());
+    .replace(/\b\w/g, (character) => character.toUpperCase());
 }
 
 function collectColumns(rows: UnknownRecord[], preferredColumns: string[]): string[] {
@@ -74,120 +104,394 @@ function collectColumns(rows: UnknownRecord[], preferredColumns: string[]): stri
   return columns;
 }
 
-function asNumber(value: unknown): number {
-  if (value == null || value === '') return 0;
-  const num = typeof value === 'number' ? value : parseFloat(String(value));
-  return Number.isFinite(num) ? num : 0;
-}
-
-function normalizeCountry(value: unknown): string | null {
-  const normalized = String(value ?? '').trim().toUpperCase();
-  if (!normalized) return null;
-  if (['US', 'USA', 'U.S.', 'U.S.A.', 'UNITED STATES', 'UNITED STATES OF AMERICA'].includes(normalized)) return 'US';
-  if (['CA', 'CAN', 'CANADA'].includes(normalized)) return 'CA';
-  if (normalized.includes('CANADA') || normalized.includes('CAFBA') || normalized.includes('CAFBM')) return 'CA';
-  if (normalized.includes('UNITED STATES') || normalized.includes('USFBA') || normalized.includes('USFBM')) return 'US';
-  return normalized;
-}
-
-function countryMatches(actual: unknown, expected?: string): boolean {
-  if (!expected) return true;
-  return normalizeCountry(actual) === normalizeCountry(expected);
-}
-
-function normalizeFulfillment(value: unknown): 'FBA' | 'MFN' | 'ALL' {
-  const normalized = String(value ?? '').trim().toUpperCase();
-  if (normalized.includes('FBA') || normalized.includes('FULFILLMENT')) return 'FBA';
-  if (normalized.includes('MFN') || normalized.includes('FBM') || normalized.includes('MERCHANT')) return 'MFN';
-  return 'ALL';
-}
-
-function normalizeChannel(value: unknown): string {
-  const normalized = String(value ?? '').trim().toUpperCase();
-  if (normalized.includes('AMAZON')) return 'AMAZON';
-  if (normalized.includes('EBAY')) return 'EBAY';
-  if (normalized.includes('WALMART')) return 'WALMART';
-  if (normalized.includes('SHOPIFY')) return 'SHOPIFY';
-  if (
-    normalized.includes('WEBSITE') ||
-    normalized.includes('DANDU') ||
-    normalized.includes('DISTINCT') ||
-    normalized.includes('BIGCOMMERCE')
-  ) {
-    return 'WEBSITE';
-  }
-  return normalized || 'OTHER';
-}
-
-function stockLocationType(row: any): 'FBA' | 'MFN' {
-  const locationText = [
-    row.locationType,
-    row.warehouse,
-    row.location,
-    row.locationName,
-  ].filter(Boolean).join(' ');
-
-  return normalizeFulfillment(locationText) === 'FBA' ? 'FBA' : 'MFN';
-}
-
-function isLinnworksUuid(value: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
-}
-
-function isLinnworksInternalAsin(value: string): boolean {
-  return value.includes(':') || value.includes('|');
-}
-
-function cleanDisplayId(asin: string | null | undefined, listingId: string | null | undefined): string {
-  const id = asin && asin !== '-' ? asin : listingId && listingId !== '-' ? listingId : null;
-  if (!id) return '-';
-  if (isLinnworksInternalAsin(id) || isLinnworksUuid(id)) return '-';
-  return id;
-}
-
-function getMarketplaceUrl(
-  channel: string,
-  country: string | undefined,
-  asin: string | null,
-  listingId: string | null,
-  productUrl?: string | null,
-): string | null {
-  if (channel === 'AMAZON') {
-    if (asin && asin !== '-' && !isLinnworksInternalAsin(asin)) {
-      const domain = country === 'CA' ? 'amazon.ca' : 'amazon.com';
-      return `https://www.${domain}/dp/${asin}`;
-    }
-  }
-  if (channel === 'EBAY') {
-    const ebayItemNumber = asin && asin !== '-' && /^\d+$/.test(asin) ? asin : null;
-    if (ebayItemNumber) return `https://www.ebay.com/itm/${ebayItemNumber}`;
-  }
-  if (channel === 'WEBSITE') {
-    if (productUrl && /^https?:\/\//i.test(productUrl)) return productUrl;
-  }
-  return null;
+function editValuesFromProduct(product: SkuProduct): EditValues {
+  return {
+    cost: product.cost ?? '',
+    weight: product.weight ?? '',
+    length: product.dimensions?.length ?? product.length ?? '',
+    width: product.dimensions?.width ?? product.width ?? '',
+    height: product.dimensions?.height ?? product.height ?? '',
+    material: product.material ?? '',
+    thickness: product.thickness ?? '',
+    packQty: product.packQty ?? '',
+  };
 }
 
 function ClickableValue({
-  value,
-  url,
+  identifiers,
+  marketplace,
 }: {
-  value: string | number | null | undefined;
-  url: string | null;
+  identifiers: MarketplaceIdentifier[];
+  marketplace: string;
 }) {
-  const display = value == null || value === '' ? '-' : String(value);
-  if (!url || display === '-') return <span>{display}</span>;
+  if (identifiers.length === 0) return <span aria-label={marketplace + ' identifier unavailable'}>—</span>;
 
   return (
-    <a
-      href={url}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="inline-flex items-center justify-center gap-1 font-mono font-semibold text-emerald-700 hover:text-emerald-900 hover:underline"
-    >
-      {display}
-      <ExternalLink className="size-3" />
-    </a>
+    <div className="flex flex-col items-center gap-0.5">
+      {identifiers.map((identifier) =>
+        identifier.url ? (
+          <a
+            key={identifier.value}
+            href={identifier.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label={'Open ' + marketplace + ' listing ' + identifier.value + ' in a new tab'}
+            className="inline-flex min-h-11 items-center justify-center gap-1 rounded px-1 font-mono font-semibold text-emerald-700 underline-offset-2 hover:text-emerald-900 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 focus-visible:ring-offset-2"
+          >
+            {identifier.value}
+            <ExternalLink aria-hidden="true" className="size-3.5 shrink-0" />
+          </a>
+        ) : (
+          <span
+            key={identifier.value}
+            className="break-all font-mono font-semibold text-slate-800"
+            aria-label={marketplace + ' listing ' + identifier.value + '; direct listing URL unavailable'}
+          >
+            {identifier.value}
+          </span>
+        ),
+      )}
+    </div>
+  );
+}
+
+function ProductIdentity({
+  sku,
+  product,
+  isEditing,
+  isSaving,
+  canEdit,
+  onEdit,
+  onSave,
+  onCancel,
+}: {
+  sku: string;
+  product: SkuProduct;
+  isEditing: boolean;
+  isSaving: boolean;
+  canEdit: boolean;
+  onEdit: () => void;
+  onSave: () => void;
+  onCancel: () => void;
+}) {
+  const title = product.title || 'Untitled product';
+
+  return (
+    <header className="flex items-center justify-between gap-3 border-b border-slate-200 px-3 py-3 sm:px-4">
+      <div className="flex min-w-0 items-center gap-3">
+        <div className="size-16 shrink-0 overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+          {product.imageUrl ? (
+            <img src={product.imageUrl} alt={title + ' product'} width={64} height={64} className="size-full object-contain p-1" />
+          ) : (
+            <div className="flex size-full items-center justify-center px-1 text-center text-xs font-semibold text-slate-400">No image</div>
+          )}
+        </div>
+        <div className="min-w-0">
+          <p className="font-mono text-xs font-bold text-emerald-700">{sku}</p>
+          <h3 className="mt-1 truncate text-sm font-black text-slate-900">{title}</h3>
+        </div>
+      </div>
+
+      {canEdit ? (
+        isEditing ? (
+          <div className="flex shrink-0 flex-wrap justify-end gap-2">
+            <button type="button" onClick={onSave} disabled={isSaving} className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg bg-emerald-700 px-3 text-xs font-bold text-white transition hover:bg-emerald-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60">
+              {isSaving ? <Loader2 aria-hidden="true" className="size-4 animate-spin motion-reduce:animate-none" /> : <Check aria-hidden="true" className="size-4" />}
+              {isSaving ? 'Saving…' : 'Save'}
+            </button>
+            <button type="button" onClick={onCancel} disabled={isSaving} className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 text-xs font-bold text-slate-700 transition hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60">
+              <X aria-hidden="true" className="size-4" />
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <button type="button" onClick={onEdit} className="inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 text-xs font-bold text-slate-700 transition hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 focus-visible:ring-offset-2">
+            <Pencil aria-hidden="true" className="size-4" />
+            Edit
+          </button>
+        )
+      ) : null}
+    </header>
+  );
+}
+
+function isEditableProductField(field: ProductFieldKey): field is keyof EditValues {
+  return field !== 'category';
+}
+
+function productFieldValue(field: ProductFieldKey, product: SkuProduct): string {
+  switch (field) {
+    case 'category':
+      return product.category || '—';
+    case 'cost':
+      return formatCurrency(product.cost);
+    case 'weight':
+      return formatWeight(product.weight);
+    case 'length':
+      return formatNumber(product.dimensions?.length ?? product.length);
+    case 'width':
+      return formatNumber(product.dimensions?.width ?? product.width);
+    case 'height':
+      return formatNumber(product.dimensions?.height ?? product.height);
+    case 'material':
+      return product.material || '—';
+    case 'thickness':
+      return product.thickness || '—';
+    case 'packQty':
+      return formatNumber(product.packQty);
+  }
+}
+
+const PRODUCT_FIELD_LABELS: Record<ProductFieldKey, string> = {
+  category: 'Category',
+  cost: 'Cost',
+  weight: 'Weight',
+  length: 'Length',
+  width: 'Width',
+  height: 'Height',
+  material: 'Material',
+  thickness: 'Thickness',
+  packQty: 'Pack Qty',
+};
+
+function ProductCell({
+  fields,
+  product,
+  isEditing,
+  editValues,
+  onValueChange,
+}: {
+  fields: readonly ProductFieldKey[];
+  product: SkuProduct;
+  isEditing: boolean;
+  editValues: EditValues;
+  onValueChange: (field: keyof EditValues, value: string) => void;
+}) {
+  return (
+    <dl className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs">
+      {fields.map((field) => {
+        const label = PRODUCT_FIELD_LABELS[field];
+        const inputId = 'sku-product-' + field;
+        const isText = field === 'material' || field === 'thickness';
+        const step = field === 'packQty' ? '1' : '0.01';
+
+        return (
+          <div key={field} className="min-w-0">
+            <dt className="text-[10px] font-bold uppercase tracking-wide text-slate-500">{label}</dt>
+            <dd className="mt-0.5 min-w-0">
+              {isEditing && isEditableProductField(field) ? (
+                <>
+                  <label htmlFor={inputId} className="sr-only">Edit {label}</label>
+                  <input
+                    id={inputId}
+                    type={isText ? 'text' : 'number'}
+                    step={isText ? undefined : step}
+                    inputMode={isText ? undefined : field === 'packQty' ? 'numeric' : 'decimal'}
+                    value={editValues[field]}
+                    onChange={(event) => onValueChange(field, event.target.value)}
+                    className="h-8 w-full min-w-0 rounded border border-slate-300 bg-white px-1.5 text-xs font-semibold text-slate-900 outline-none transition focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/20"
+                  />
+                </>
+              ) : (
+                <span className="break-words font-semibold text-slate-900">{productFieldValue(field, product)}</span>
+              )}
+            </dd>
+          </div>
+        );
+      })}
+    </dl>
+  );
+}
+
+function renderMarketplaceValue(row: PrimaryTableRow, column: MarketplaceComparisonColumn): ReactNode {
+  if (row.kind === 'sales') {
+    return (
+      <dl className="grid grid-cols-4 gap-1 text-center text-xs">
+        {row.windows.map((window) => (
+          <div key={window}>
+            <dt className="text-[10px] font-bold uppercase text-slate-500">{window}D</dt>
+            <dd className="mt-0.5 font-semibold tabular-nums text-slate-900">
+              {formatNumber(column.sales[row.field][window])}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    );
+  }
+
+  if (row.kind === 'marketplace') {
+    switch (row.field) {
+      case 'identifier':
+        return <ClickableValue identifiers={column.identifiers} marketplace={column.label} />;
+      case 'fbaQty':
+        return formatNumber(column.fbaQty);
+      case 'mfnStock':
+        return formatNumber(column.mfnStock);
+      case 'fbaPrice':
+        return formatCurrency(column.fbaPrice);
+      case 'price':
+        return formatCurrency(column.price);
+    }
+  }
+
+  return <span aria-label="Not applicable">—</span>;
+}
+
+function SectionHeader({ label }: { label: string }) {
+  return (
+    <tr>
+      <th scope="rowgroup" colSpan={PRIMARY_TABLE_HEADERS.length} className="border-y border-slate-300 bg-slate-100 px-3 py-1.5 text-left text-xs font-black uppercase tracking-wider text-slate-600">
+        {label}
+      </th>
+    </tr>
+  );
+}
+
+function PrimaryRow({
+  row,
+  rowIndex,
+  columns,
+  product,
+  isEditing,
+  editValues,
+  onValueChange,
+}: {
+  row: PrimaryTableRow;
+  rowIndex: number;
+  columns: MarketplaceComparisonColumn[];
+  product: SkuProduct;
+  isEditing: boolean;
+  editValues: EditValues;
+  onValueChange: (field: keyof EditValues, value: string) => void;
+}) {
+  const background = rowIndex % 2 === 1 ? 'bg-slate-50' : 'bg-white';
+
+  return (
+    <tr className={background}>
+      <th scope="row" className={['sticky left-0 z-10 border-b border-r border-slate-200 px-3 py-1.5 text-left text-xs font-bold text-slate-700', background].join(' ')}>
+        {row.label}
+      </th>
+      <td className="border-b border-r border-slate-200 px-2 py-1.5 text-sm tabular-nums text-slate-900">
+        {row.kind === 'product' ? (
+          <ProductCell fields={row.fields} product={product} isEditing={isEditing} editValues={editValues} onValueChange={onValueChange} />
+        ) : (
+          <span aria-label="Not applicable">—</span>
+        )}
+      </td>
+      {columns.map((column) => (
+        <td key={column.key} className="border-b border-r border-slate-200 px-2 py-1.5 text-center text-sm font-semibold tabular-nums text-slate-900 last:border-r-0">
+          {renderMarketplaceValue(row, column)}
+        </td>
+      ))}
+    </tr>
+  );
+}
+
+function TableSection({
+  label,
+  rows,
+  columns,
+  product,
+  isEditing,
+  editValues,
+  onValueChange,
+  startIndex,
+}: {
+  label: string;
+  rows: readonly PrimaryTableRow[];
+  columns: MarketplaceComparisonColumn[];
+  product: SkuProduct;
+  isEditing: boolean;
+  editValues: EditValues;
+  onValueChange: (field: keyof EditValues, value: string) => void;
+  startIndex: number;
+}) {
+  return (
+    <>
+      <SectionHeader label={label} />
+      {rows.map((row, index) => (
+        <PrimaryRow
+          key={[label, row.label].join('-')}
+          row={row}
+          rowIndex={startIndex + index}
+          columns={columns}
+          product={product}
+          isEditing={isEditing}
+          editValues={editValues}
+          onValueChange={onValueChange}
+        />
+      ))}
+    </>
+  );
+}
+
+function ConsolidatedSkuTable({
+  columns,
+  product,
+  isEditing,
+  editValues,
+  onValueChange,
+}: {
+  columns: MarketplaceComparisonColumn[];
+  product: SkuProduct;
+  isEditing: boolean;
+  editValues: EditValues;
+  onValueChange: (field: keyof EditValues, value: string) => void;
+}) {
+  let rowIndex = 0;
+
+  return (
+    <section aria-label="SKU decision table" className="min-w-0">
+      <div className="overflow-x-auto border-b border-slate-200" tabIndex={0} aria-label="Scrollable SKU decision table">
+        <table className="w-full min-w-[1152px] table-fixed border-collapse text-left">
+          <caption className="sr-only">
+            Consolidated SKU decision table with product information and marketplace data for Amazon US, Amazon CA, eBay, and DistinctAndUnique.
+          </caption>
+          <colgroup>
+            <col className="w-40" />
+            <col className="w-72" />
+            <col className="w-44" />
+            <col className="w-44" />
+            <col className="w-44" />
+            <col className="w-44" />
+          </colgroup>
+          <thead className="sticky top-0 z-20 bg-emerald-800 text-white">
+            <tr>
+              <th scope="col" className="sticky left-0 z-30 border-r border-emerald-700 bg-emerald-800 px-3 py-2 text-left text-xs font-black uppercase tracking-wide">
+                {PRIMARY_TABLE_HEADERS[0]}
+              </th>
+              <th scope="col" className="border-r border-emerald-700 px-2 py-2 text-left text-xs font-black uppercase tracking-wide">
+                {PRIMARY_TABLE_HEADERS[1]}
+              </th>
+              {columns.map((column) => (
+                <th key={column.key} scope="col" className="border-r border-emerald-700 px-2 py-2 text-center text-xs font-black last:border-r-0">
+                  {column.label}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {PRIMARY_TABLE_SECTIONS.map((section) => {
+              const startIndex = rowIndex;
+              rowIndex += section.rows.length;
+              return (
+                <TableSection
+                  key={section.label}
+                  label={section.label}
+                  rows={section.rows}
+                  columns={columns}
+                  product={product}
+                  isEditing={isEditing}
+                  editValues={editValues}
+                  onValueChange={onValueChange}
+                  startIndex={startIndex}
+                />
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </section>
   );
 }
 
@@ -206,22 +510,19 @@ function DetailTable({
     <section className="border-t border-slate-200 p-4">
       <div className="mb-3 flex items-center justify-between gap-3">
         <h4 className="text-xs font-black uppercase tracking-wide text-slate-500">{title}</h4>
-        <span className="rounded bg-slate-100 px-2 py-1 text-[10px] font-bold uppercase text-slate-500">
+        <span className="rounded bg-slate-100 px-2 py-1 text-xs font-bold uppercase text-slate-500">
           {rows.length} {rows.length === 1 ? 'row' : 'rows'}
         </span>
       </div>
-
       {rows.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-slate-200 px-3 py-4 text-sm font-semibold text-slate-400">
-          No data available
-        </div>
+        <div className="rounded-lg border border-dashed border-slate-200 px-3 py-4 text-sm font-semibold text-slate-500">No data available</div>
       ) : (
         <div className="max-h-96 overflow-auto rounded-lg border border-slate-200">
           <table className="w-full min-w-max border-collapse text-left text-xs">
             <thead className="sticky top-0 bg-slate-100 text-slate-600">
               <tr>
                 {columns.map((column) => (
-                  <th key={column} className="border-b border-r border-slate-200 px-3 py-2 font-black uppercase">
+                  <th key={column} scope="col" className="border-b border-r border-slate-200 px-3 py-2 font-black uppercase">
                     {humanizeKey(column)}
                   </th>
                 ))}
@@ -245,201 +546,44 @@ function DetailTable({
   );
 }
 
-function periodDays(row: any): number | null {
-  const explicitDays = asNumber(row.periodDays ?? row.days ?? row.windowDays);
-  if (explicitDays > 0) return explicitDays;
-
-  const periodLabel = String(row.period ?? row.window ?? row.label ?? '').match(/\d+/);
-  if (periodLabel) return Number(periodLabel[0]);
-
-  const start = new Date(row.periodStart).getTime();
-  const end = new Date(row.periodEnd).getTime();
-  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
-  return Math.round((end - start) / (1000 * 60 * 60 * 24));
-}
-
-function salesPeriodMatches(metric: any, targetDays: number): boolean {
-  const days = periodDays(metric);
-  if (days == null) return false;
-  return days === targetDays || days + 1 === targetDays;
-}
-
-type SalesQuery = {
-  channel?: string;
-  country?: string;
-  fulfillmentType?: 'FBA' | 'MFN';
-  days: number;
-};
-
-type SalesValue = {
-  display: string;
-  description: string;
-};
-
-function matchingSalesMetrics(
-  metrics: SkuMetrics,
-  options: SalesQuery,
-): any[] {
-  return (metrics.salesMetrics as any[])
-    .filter((metric) => {
-      if (options.channel && normalizeChannel(metric.channel) !== normalizeChannel(options.channel)) return false;
-      if (!countryMatches(metric.country, options.country)) return false;
-      const metricFulfillment = normalizeFulfillment(metric.fulfillmentType);
-      if (options.fulfillmentType && metricFulfillment !== options.fulfillmentType) {
-        const unknownMerchantSale = metricFulfillment === 'ALL' && options.fulfillmentType === 'MFN';
-        if (!unknownMerchantSale) return false;
-      }
-      return salesPeriodMatches(metric, options.days);
-    });
-}
-
-function sumSales(metrics: SkuMetrics, options: SalesQuery): number {
-  return matchingSalesMetrics(metrics, options)
-    .reduce((sum, metric) => sum + asNumber(metric.unitsSold), 0);
-}
-
-function getSalesValue(metrics: SkuMetrics, options: SalesQuery): SalesValue {
-  const matches = matchingSalesMetrics(metrics, options);
-  const period = `${options.days}-day`;
-  const marketplace = options.channel ? normalizeChannel(options.channel) : 'all marketplaces';
-
-  if (matches.length === 0) {
-    return {
-      display: '-',
-      description: `No ${period} sales data is available for ${marketplace}.`,
-    };
-  }
-
-  const unitsSold = matches.reduce((sum, metric) => sum + asNumber(metric.unitsSold), 0);
-  return {
-    display: formatNumber(unitsSold),
-    description: `${formatNumber(unitsSold)} units sold in the last ${options.days} days for ${marketplace}.`,
-  };
-}
-
-function findChannel(metrics: SkuMetrics, channel: string, country?: string) {
-  const matches = (metrics.channels as any[]).filter((row) =>
-    row.channel === channel && countryMatches(row.country, country),
-  );
-  if (matches.length === 0) return undefined;
-
-  const hasValidId = (row: any): boolean => {
-    const asin = row?.asin;
-    const listingId = row?.listingId;
-    if (asin && asin !== '-' && !isLinnworksInternalAsin(asin) && !isLinnworksUuid(asin)) return true;
-    if (listingId && listingId !== '-' && !isLinnworksUuid(listingId) && !isLinnworksInternalAsin(listingId)) return true;
-    return false;
-  };
-
-  return matches.find(hasValidId) ?? matches[0];
-}
-
-function getChannelData(metrics: SkuMetrics, channelName: string, country?: string) {
-  const channel = findChannel(metrics, channelName, country);
-  const stockFBA = stockQuantity(metrics, { country, fba: true, includeInbound: false });
-  const stockMFN = stockQuantity(metrics, { country, fba: false, includeInbound: false });
-
-  const rawAsin = channel?.asin ?? null;
-  const displayAsin = rawAsin && !isLinnworksInternalAsin(rawAsin) && !isLinnworksUuid(rawAsin) ? rawAsin : '-';
-
-  return {
-    asin: displayAsin,
-    listingId: channel?.listingId ?? null,
-    url: getMarketplaceUrl(
-      channelName,
-      country,
-      rawAsin,
-      channel?.listingId ?? null,
-      (metrics.product as any)?.productUrl ?? null,
-    ),
-    fbaQty: stockFBA > 0 ? stockFBA.toLocaleString() : '-',
-    mfnQty: stockMFN > 0 ? stockMFN.toLocaleString() : '-',
-    fbaPrice: formatCurrency(channel?.fbaPrice ?? channel?.price ?? channel?.mfnPrice),
-    mfnPrice: formatCurrency(channel?.mfnPrice ?? channel?.price ?? channel?.fbaPrice),
-  };
-}
-
-function SalesMetric({ value, label }: { value: SalesValue; label: string }) {
+function RawLinnworksData({ data }: { data: SkuMetrics }) {
   return (
-    <span className="inline-flex items-baseline gap-1" aria-label={`${label}: ${value.description}`} title={value.description}>
-      <span className="text-[10px] font-bold uppercase tracking-wide text-slate-400">{label}</span>
-      <span className="font-semibold tabular-nums text-slate-800">{value.display}</span>
-    </span>
+    <details className="border-t border-slate-200">
+      <summary className="flex min-h-12 cursor-pointer items-center justify-between gap-3 px-4 py-3 text-sm font-bold text-slate-700 marker:text-emerald-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-emerald-600">
+        <span>View raw Linnworks data</span>
+        <span className="text-xs font-semibold text-slate-500">Diagnostic records</span>
+      </summary>
+      <div className="border-t border-slate-200">
+        <DetailTable title="Product" rows={data.product ? [data.product] : []} preferredColumns={['id', 'sku', 'title', 'brand', 'category', 'status', 'cost', 'currency', 'weight', 'length', 'width', 'height', 'material', 'thickness', 'packQty', 'imageUrl', 'productUrl', 'lastSyncedAt', 'createdAt', 'updatedAt']} />
+        <DetailTable title="Stock" rows={data.stock} preferredColumns={['id', 'productId', 'country', 'locationType', 'warehouse', 'quantity', 'reserved', 'inbound', 'available', 'updatedAt']} />
+        <DetailTable title="Pricing and Channel" rows={data.channels} preferredColumns={['id', 'productId', 'channel', 'country', 'asin', 'listingId', 'price', 'fbaPrice', 'mfnPrice', 'currency', 'isActive', 'updatedAt']} />
+        <DetailTable title="Sales" rows={data.salesMetrics} preferredColumns={['id', 'productId', 'productChannelId', 'channel', 'country', 'fulfillmentType', 'periodStart', 'periodEnd', 'unitsSold', 'revenue', 'velocity', 'currency', 'createdAt', 'updatedAt']} />
+      </div>
+    </details>
   );
 }
 
-function SalesDataCell({
-  metrics,
-  channel,
-  country,
-  days,
+export function SkuDataTable({
+  data,
+  session,
+  onUpdate,
 }: {
-  metrics: SkuMetrics;
-  channel: string;
-  country?: string;
-  days: number;
+  data: SkuMetrics;
+  session?: AuthSession;
+  onUpdate?: () => void;
 }) {
-  if (channel === 'AMAZON') {
-    const fba = getSalesValue(metrics, { channel, country, fulfillmentType: 'FBA', days });
-    const mfn = getSalesValue(metrics, { channel, country, fulfillmentType: 'MFN', days });
-
-    return (
-      <div className="flex flex-col items-center gap-1">
-        <SalesMetric label="FBA" value={fba} />
-        <SalesMetric label="MFN" value={mfn} />
-      </div>
-    );
-  }
-
-  const total = getSalesValue(metrics, { channel, country, days });
-  return <SalesMetric label="Total" value={total} />;
-}
-
-function stockQuantity(metrics: SkuMetrics, options: { country?: string; fba?: boolean; includeInbound?: boolean }): number {
-  return (metrics.stock as any[])
-    .filter((row) => {
-      const type = stockLocationType(row);
-      if (!countryMatches(row.country, options.country)) return false;
-      return options.fba ? type === 'FBA' : type === 'MFN';
-    })
-    .reduce((sum, row) => sum + asNumber(row.available) + (options.includeInbound ? asNumber(row.inbound) : 0), 0);
-}
-
-const ATTRIBUTE_ROWS = [
-  { label: 'CATEGORY' },
-  { label: 'COST' },
-  { label: 'WEIGHT (oz / lb / kg)' },
-  { label: 'LENGTH (in)' },
-  { label: 'WIDTH (in)' },
-  { label: 'HEIGHT (in)' },
-  { label: 'MATERIAL' },
-  { label: 'THICKNESS' },
-  { label: 'PACK QTY' },
-] as const;
-
-
-
-export function SkuDataTable({ data, session, onUpdate }: { data: SkuMetrics; session?: AuthSession; onUpdate?: () => void }) {
+  const product = data.product ?? {};
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState('');
-  const product: any = data.product ?? {};
-
-  const [editValues, setEditValues] = useState({
-    cost: product.cost ?? '',
-    weight: product.weight ?? '',
-    length: product.dimensions?.length ?? product.length ?? '',
-    width: product.dimensions?.width ?? product.width ?? '',
-    height: product.dimensions?.height ?? product.height ?? '',
-    material: product.material ?? '',
-    thickness: product.thickness ?? '',
-    packQty: product.packQty ?? '',
-  });
+  const [editValues, setEditValues] = useState<EditValues>(() => editValuesFromProduct(product));
+  const comparison = buildSkuComparison(data);
 
   const handleSave = async () => {
     if (!session || !onUpdate) return;
     setIsSaving(true);
     setError('');
+
     try {
       await authApi.updateProduct(session.accessToken, data.sku, {
         cost: editValues.cost === '' ? null : Number(editValues.cost),
@@ -453,8 +597,8 @@ export function SkuDataTable({ data, session, onUpdate }: { data: SkuMetrics; se
       });
       setIsEditing(false);
       onUpdate();
-    } catch (err: any) {
-      setError(err?.response?.data?.message || err?.message || 'Failed to update product details. Please try again.');
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : 'Failed to update product details. Please try again.');
     } finally {
       setIsSaving(false);
     }
@@ -463,395 +607,38 @@ export function SkuDataTable({ data, session, onUpdate }: { data: SkuMetrics; se
   const handleCancel = () => {
     setIsEditing(false);
     setError('');
-    setEditValues({
-      cost: product.cost ?? '',
-      weight: product.weight ?? '',
-      length: product.dimensions?.length ?? product.length ?? '',
-      width: product.dimensions?.width ?? product.width ?? '',
-      height: product.dimensions?.height ?? product.height ?? '',
-      material: product.material ?? '',
-      thickness: product.thickness ?? '',
-      packQty: product.packQty ?? '',
-    });
+    setEditValues(editValuesFromProduct(product));
   };
-
-  const amazonUs = findChannel(data, 'AMAZON', 'US');
-  const amazonCa = findChannel(data, 'AMAZON', 'CA');
-  const ebay = findChannel(data, 'EBAY');
-  const website = findChannel(data, 'WEBSITE');
-  const channelDefs = [
-    { name: 'Amazon US', ch: 'AMAZON', country: 'US' },
-    { name: 'Amazon CA', ch: 'AMAZON', country: 'CA' },
-    { name: 'eBay', ch: 'EBAY', country: undefined },
-    { name: 'DistinctAndUnique', ch: 'WEBSITE', country: undefined },
-  ];
-
-  const channels = channelDefs.map((def) => ({
-    ...def,
-    data: getChannelData(data, def.ch, def.country),
-  }));
-
-  const salesRows = [
-    { label: '7-Day Sales (units)', days: 7 },
-    { label: '30-Day Sales (units)', days: 30 },
-    { label: '90-Day Sales (units)', days: 90 },
-    { label: '365-Day Sales (units)', days: 365 },
-  ];
-
-  const requiredOverviewRows: {
-    label: string;
-    stock: ReactNode;
-    price: ReactNode;
-    asin: ReactNode;
-  }[] = [
-    {
-      label: 'DEFAULT',
-      stock: formatNumber(stockQuantity(data, { fba: false })),
-      price: '-',
-      asin: '-',
-    },
-    {
-      label: 'AZ US',
-      stock: '-',
-      price: formatCurrency(amazonUs?.mfnPrice ?? amazonUs?.price ?? amazonUs?.fbaPrice),
-      asin: <ClickableValue value={amazonUs?.asin ?? '-'} url={getMarketplaceUrl('AMAZON', 'US', amazonUs?.asin ?? null, amazonUs?.listingId ?? null)} />,
-    },
-    {
-      label: 'USFBA',
-      stock: formatNumber(stockQuantity(data, { country: 'US', fba: true, includeInbound: true })),
-      price: formatCurrency(amazonUs?.fbaPrice ?? amazonUs?.price ?? amazonUs?.mfnPrice),
-      asin: <ClickableValue value={amazonUs?.asin ?? '-'} url={getMarketplaceUrl('AMAZON', 'US', amazonUs?.asin ?? null, amazonUs?.listingId ?? null)} />,
-    },
-    {
-      label: 'AZ CA',
-      stock: '-',
-      price: formatCurrency(amazonCa?.mfnPrice ?? amazonCa?.price ?? amazonCa?.fbaPrice),
-      asin: <ClickableValue value={amazonCa?.asin ?? '-'} url={getMarketplaceUrl('AMAZON', 'CA', amazonCa?.asin ?? null, amazonCa?.listingId ?? null)} />,
-    },
-    {
-      label: 'CAFBA',
-      stock: formatNumber(stockQuantity(data, { country: 'CA', fba: true, includeInbound: true })),
-      price: formatCurrency(amazonCa?.fbaPrice ?? amazonCa?.price ?? amazonCa?.fbaPrice),
-      asin: <ClickableValue value={amazonCa?.asin ?? '-'} url={getMarketplaceUrl('AMAZON', 'CA', amazonCa?.asin ?? null, amazonCa?.listingId ?? null)} />,
-    },
-    {
-      label: 'EBAY',
-      stock: '-',
-      price: formatCurrency(ebay?.price ?? ebay?.mfnPrice ?? ebay?.fbaPrice),
-      asin: <ClickableValue value={cleanDisplayId(ebay?.asin, ebay?.listingId)} url={getMarketplaceUrl('EBAY', ebay?.country ?? undefined, ebay?.asin ?? null, ebay?.listingId ?? null)} />,
-    },
-    {
-      label: 'D&U',
-      stock: '-',
-      price: formatCurrency(website?.price ?? website?.mfnPrice ?? website?.fbaPrice),
-      asin: <ClickableValue value={cleanDisplayId(website?.asin, website?.listingId)} url={getMarketplaceUrl('WEBSITE', website?.country ?? undefined, website?.asin ?? null, website?.listingId ?? null, (data.product as any)?.productUrl ?? null)} />,
-    },
-  ];
-
-  const saleWindows = [7, 30, 90, 365];
-  const requiredSalesRows = [
-    {
-      label: 'All Sites Combined',
-      values: saleWindows.map((days) => formatNumber(sumSales(data, { days }))),
-    },
-    {
-      label: 'Amazon.ca MFN',
-      values: saleWindows.map((days) => formatNumber(sumSales(data, { channel: 'AMAZON', country: 'CA', fulfillmentType: 'MFN', days }))),
-    },
-    {
-      label: 'Amazon.ca FBA',
-      values: saleWindows.map((days) => formatNumber(sumSales(data, { channel: 'AMAZON', country: 'CA', fulfillmentType: 'FBA', days }))),
-    },
-    {
-      label: 'Amazon.com MFN',
-      values: saleWindows.map((days) => formatNumber(sumSales(data, { channel: 'AMAZON', country: 'US', fulfillmentType: 'MFN', days }))),
-    },
-    {
-      label: 'Amazon.com FBA',
-      values: saleWindows.map((days) => formatNumber(sumSales(data, { channel: 'AMAZON', country: 'US', fulfillmentType: 'FBA', days }))),
-    },
-    {
-      label: 'Ebay',
-      values: saleWindows.map((days) => formatNumber(sumSales(data, { channel: 'EBAY', days }))),
-    },
-    {
-      label: 'DistinctAndUnique',
-      values: saleWindows.map((days) => formatNumber(sumSales(data, { channel: 'WEBSITE', days }))),
-    },
-  ];
-  const attrValues: Record<string, string> = {
-    'CATEGORY': product.category ?? 'N/A',
-    'COST': formatCurrency(product.cost),
-    'WEIGHT (oz / lb / kg)': formatWeight(product.weight),
-    'LENGTH (in)': formatNumber(product.dimensions?.length ?? product.length),
-    'WIDTH (in)': formatNumber(product.dimensions?.width ?? product.width),
-    'HEIGHT (in)': formatNumber(product.dimensions?.height ?? product.height),
-    'MATERIAL': product.material ?? 'N/A',
-    'THICKNESS': product.thickness ?? 'N/A',
-    'PACK QTY': product.packQty ?? 'N/A',
-  };
-
-  const th = 'border-b border-r border-slate-200 p-3 text-xs font-bold uppercase tracking-wide';
-  const td = 'border-b border-r border-slate-200 p-2 text-center text-sm';
-  const tdLeft = 'border-b border-r border-slate-200 p-3 text-sm';
-  const productRows = data.product ? [data.product as UnknownRecord] : [];
-  const stockRows = data.stock as UnknownRecord[];
-  const channelRows = data.channels as UnknownRecord[];
-  const allSalesRows = data.salesMetrics as UnknownRecord[];
 
   return (
-    <div className="mt-2 rounded-xl border border-slate-200 bg-white shadow-sm text-sm">
-      {error && (
-        <div className="bg-red-50 border-b border-red-200 px-4 py-2.5 text-xs font-semibold text-red-800 flex items-center justify-between">
-          <span>Error: {error}</span>
-          <button onClick={() => setError('')} className="text-red-500 hover:text-red-700 font-bold text-base line-height-1">×</button>
+    <div className="mt-2 overflow-hidden rounded-xl border border-slate-200 bg-white text-sm shadow-sm">
+      {error ? (
+        <div role="alert" className="flex items-center justify-between gap-3 border-b border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-800">
+          <span>{error}</span>
+          <button type="button" onClick={() => setError('')} aria-label="Dismiss product update error" className="flex size-11 shrink-0 items-center justify-center rounded-lg text-red-700 transition hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-700 focus-visible:ring-offset-2">
+            <X aria-hidden="true" className="size-5" />
+          </button>
         </div>
-      )}
+      ) : null}
 
-
-
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[900px] border-collapse text-left">
-          <thead>
-            <tr className="bg-slate-50">
-              <th className={`${th} bg-slate-100 text-slate-600 w-52`}>SKU</th>
-              <td className={`${td} text-left font-mono text-emerald-700 font-bold`}>{data.sku}</td>
-              <td className={`${td} text-left font-medium text-slate-900`} colSpan={channels.length - 1}>
-                {product.title ?? 'N/A'}
-              </td>
-            </tr>
-            <tr>
-              <th className={`${th} bg-slate-100 text-slate-600`}>
-                <div className="flex justify-between items-center">
-                  <span>Product Info</span>
-                  {session && onUpdate && (
-                    !isEditing ? (
-                      <button onClick={() => setIsEditing(true)} className="inline-flex items-center gap-1 rounded bg-slate-200 px-2 py-1 text-[10px] font-bold text-slate-700 hover:bg-slate-300 transition">
-                        <Pencil className="size-3" /> Edit
-                      </button>
-                    ) : (
-                      <div className="flex gap-1">
-                        <button onClick={handleSave} disabled={isSaving} className="inline-flex items-center gap-1 rounded bg-emerald-600 px-2 py-1 text-[10px] font-bold text-white hover:bg-emerald-700 transition">
-                          {isSaving ? <Loader2 className="size-3 animate-spin" /> : <Check className="size-3" />} Save
-                        </button>
-                        <button onClick={handleCancel} disabled={isSaving} className="inline-flex items-center gap-1 rounded bg-red-100 px-2 py-1 text-[10px] font-bold text-red-700 hover:bg-red-200 transition">
-                          <X className="size-3" /> Cancel
-                        </button>
-                      </div>
-                    )
-                  )}
-                </div>
-              </th>
-              {channels.map((channel) => (
-                <th key={channel.name} className={`${th} bg-emerald-700 text-white text-center`}>
-                  {channel.name}
-                </th>
-              ))}
-            </tr>
-          </thead>
-
-          <tbody>
-            <tr>
-              <td className={`${tdLeft} align-top`} rowSpan={3}>
-                {product.imageUrl ? (
-                  <img
-                    src={product.imageUrl}
-                    alt={product.title}
-                    className="h-36 w-36 rounded-xl border border-slate-100 object-contain p-1"
-                  />
-                ) : (
-                  <div className="flex h-36 w-36 items-center justify-center rounded-xl bg-slate-100 text-xs text-slate-400">
-                    No Image
-                  </div>
-                )}
-              </td>
-              {channels.map((channel) => (
-                <td key={channel.name} className={td}>
-                  <span className="block text-[10px] uppercase tracking-wider text-slate-400">Listing ID / ASIN</span>
-                  <ClickableValue value={channel.data.asin} url={channel.data.url} />
-                </td>
-              ))}
-            </tr>
-            <tr className="bg-slate-50">
-              {channels.map((channel) => (
-                <td key={channel.name} className={td}>
-                  <span className="block text-[10px] uppercase tracking-wider text-slate-400">FBA Stock</span>
-                  <span className="font-semibold text-slate-800">{(channel.data as any)['fbaQty']}</span>
-                </td>
-              ))}
-            </tr>
-            <tr>
-              {channels.map((channel) => (
-                <td key={channel.name} className={td}>
-                  <span className="block text-[10px] uppercase tracking-wider text-slate-400">MFN Stock</span>
-                  <span className="font-semibold text-slate-800">{(channel.data as any)['mfnQty']}</span>
-                </td>
-              ))}
-            </tr>
-            <tr className="bg-slate-50">
-              <td className={tdLeft}></td>
-              {channels.map((channel) => (
-                <td key={channel.name} className={td}>
-                  <span className="block text-[10px] uppercase tracking-wider text-slate-400">FBA Price</span>
-                  <span className="font-bold text-emerald-700">
-                    {(channel.data as any)['fbaPrice']}
-                  </span>
-                </td>
-              ))}
-            </tr>
-            <tr>
-              <td className={tdLeft}></td>
-              {channels.map((channel) => (
-                <td key={channel.name} className={td}>
-                  <span className="block text-[10px] uppercase tracking-wider text-slate-400">MFN Price</span>
-                  <span className="font-bold text-slate-700">
-                    {(channel.data as any)['mfnPrice']}
-                  </span>
-                </td>
-              ))}
-            </tr>
-
-
-            {ATTRIBUTE_ROWS.map((row, i) => {
-              let editContent = <span className="font-semibold text-slate-900">{attrValues[row.label] ?? 'N/A'}</span>;
-
-              if (isEditing) {
-                if (row.label === 'COST') {
-                  editContent = <input type="number" step="0.01" className="w-20 rounded border border-slate-300 px-1 py-0.5 text-right font-semibold outline-none focus:border-emerald-500" value={editValues.cost} onChange={e => setEditValues({ ...editValues, cost: e.target.value })} />;
-                } else if (row.label === 'WEIGHT (oz / lb / kg)') {
-                  editContent = <input type="number" step="0.01" className="w-20 rounded border border-slate-300 px-1 py-0.5 text-right font-semibold outline-none focus:border-emerald-500" value={editValues.weight} onChange={e => setEditValues({ ...editValues, weight: e.target.value })} />;
-                } else if (row.label === 'LENGTH (in)') {
-                  editContent = <input type="number" step="0.01" className="w-20 rounded border border-slate-300 px-1 py-0.5 text-right font-semibold outline-none focus:border-emerald-500" value={editValues.length} onChange={e => setEditValues({ ...editValues, length: e.target.value })} />;
-                } else if (row.label === 'WIDTH (in)') {
-                  editContent = <input type="number" step="0.01" className="w-20 rounded border border-slate-300 px-1 py-0.5 text-right font-semibold outline-none focus:border-emerald-500" value={editValues.width} onChange={e => setEditValues({ ...editValues, width: e.target.value })} />;
-                } else if (row.label === 'HEIGHT (in)') {
-                  editContent = <input type="number" step="0.01" className="w-20 rounded border border-slate-300 px-1 py-0.5 text-right font-semibold outline-none focus:border-emerald-500" value={editValues.height} onChange={e => setEditValues({ ...editValues, height: e.target.value })} />;
-                } else if (row.label === 'MATERIAL') {
-                  editContent = <input type="text" className="w-24 rounded border border-slate-300 px-1 py-0.5 text-right font-semibold outline-none focus:border-emerald-500" value={editValues.material} onChange={e => setEditValues({ ...editValues, material: e.target.value })} />;
-                } else if (row.label === 'THICKNESS') {
-                  editContent = <input type="text" className="w-24 rounded border border-slate-300 px-1 py-0.5 text-right font-semibold outline-none focus:border-emerald-500" value={editValues.thickness} onChange={e => setEditValues({ ...editValues, thickness: e.target.value })} />;
-                } else if (row.label === 'PACK QTY') {
-                  editContent = <input type="number" step="1" className="w-20 rounded border border-slate-300 px-1 py-0.5 text-right font-semibold outline-none focus:border-emerald-500" value={editValues.packQty} onChange={e => setEditValues({ ...editValues, packQty: e.target.value })} />;
-                }
-              }
-
-              return (
-                <tr key={row.label} className={i % 2 === 0 ? 'bg-slate-50 hover:bg-slate-100 transition-colors' : 'hover:bg-slate-50 transition-colors'}>
-                  <td className={tdLeft}>
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-[11px] font-bold uppercase tracking-wide text-slate-500">{row.label}</span>
-                      {editContent}
-                    </div>
-                  </td>
-                  {channels.map((channel) => (
-                    <td key={channel.name} className={`${td} text-left`}>
-                      <span className="block text-[10px] uppercase tracking-wider text-slate-400">{channel.name}</span>
-                      <span className="text-[11px] font-semibold text-slate-500">{attrValues[row.label] ?? 'N/A'}</span>
-                    </td>
-                  ))}
-                </tr>
-              );
-            })}
-            <tr>
-              <td colSpan={channels.length + 1} className="border-b border-t border-slate-300 bg-slate-200 px-3 py-1.5">
-                <span className="text-[10px] font-black uppercase tracking-widest text-slate-600">Sales Data</span>
-              </td>
-            </tr>
-            {salesRows.map((row, i) => (
-              <tr key={row.days} className={i % 2 === 0 ? 'bg-slate-50 hover:bg-slate-100 transition-colors' : 'hover:bg-slate-50 transition-colors'}>
-                <td className={tdLeft}>
-                  <span className="text-[11px] font-bold uppercase tracking-wide text-slate-500">{row.label}</span>
-                </td>
-                {channels.map((channel) => (
-                  <td key={channel.name} className={td}>
-                    <SalesDataCell
-                      metrics={data}
-                      channel={channel.ch}
-                      country={channel.country}
-                      days={row.days}
-                    />
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      <div className="overflow-x-auto border-t border-slate-200">
-        <table className="w-full min-w-[900px] border-collapse text-left">
-          <thead>
-            <tr>
-              <th className={`${th} bg-slate-800 text-white w-52`}>Required Matrix</th>
-              <th className={`${th} bg-slate-100 text-slate-600 text-center`}>Stock Quantity</th>
-              <th className={`${th} bg-slate-100 text-slate-600 text-center`}>Selling Price</th>
-              <th className={`${th} bg-slate-100 text-slate-600 text-center`}>ASIN / Listing</th>
-            </tr>
-          </thead>
-          <tbody>
-            {requiredOverviewRows.map((row, index) => (
-              <tr key={row.label} className={index % 2 === 0 ? 'bg-slate-50 hover:bg-slate-100 transition-colors' : 'hover:bg-slate-50 transition-colors'}>
-                <th className={`${tdLeft} bg-slate-100 text-[11px] font-black uppercase tracking-wide text-slate-600`}>
-                  {row.label}
-                </th>
-                <td className={`${td} font-black text-slate-900`}>{row.stock}</td>
-                <td className={`${td} font-black text-slate-900`}>{row.price}</td>
-                <td className={`${td} font-black text-slate-900`}>{row.asin}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      <div className="overflow-x-auto border-t border-slate-200">
-        <table className="w-full min-w-[900px] border-collapse text-left">
-          <thead>
-            <tr>
-              <th className={`${th} bg-slate-800 text-white w-52`}>Sales Matrix</th>
-              {saleWindows.map((days) => (
-                <th key={days} className={`${th} bg-slate-100 text-slate-600 text-center`}>
-                  {days} Days Sales
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {requiredSalesRows.map((row, index) => (
-              <tr key={row.label} className={index % 2 === 0 ? 'bg-slate-50 hover:bg-slate-100 transition-colors' : 'hover:bg-slate-50 transition-colors'}>
-                <th className={`${tdLeft} bg-slate-100 text-[11px] font-black uppercase tracking-wide text-slate-600`}>
-                  {row.label}
-                </th>
-                {row.values.map((value, valueIndex) => (
-                  <td key={`${row.label}-${saleWindows[valueIndex]}`} className={`${td} font-black text-slate-900`}>
-                    {value}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      <DetailTable
-        title="All Product Data"
-        rows={productRows}
-        preferredColumns={['id', 'sku', 'title', 'brand', 'category', 'status', 'cost', 'currency', 'weight', 'length', 'width', 'height', 'material', 'thickness', 'packQty', 'imageUrl', 'productUrl', 'lastSyncedAt', 'createdAt', 'updatedAt']}
+      <ProductIdentity
+        sku={data.sku}
+        product={product}
+        isEditing={isEditing}
+        isSaving={isSaving}
+        canEdit={Boolean(session && onUpdate)}
+        onEdit={() => setIsEditing(true)}
+        onSave={handleSave}
+        onCancel={handleCancel}
       />
-      <DetailTable
-        title="All Stock Data"
-        rows={stockRows}
-        preferredColumns={['id', 'productId', 'country', 'locationType', 'warehouse', 'quantity', 'reserved', 'inbound', 'available', 'updatedAt']}
+      <ConsolidatedSkuTable
+        columns={comparison.columns}
+        product={product}
+        isEditing={isEditing}
+        editValues={editValues}
+        onValueChange={(field, value) => setEditValues((current) => ({ ...current, [field]: value }))}
       />
-      <DetailTable
-        title="All Pricing and Channel Data"
-        rows={channelRows}
-        preferredColumns={['id', 'productId', 'channel', 'country', 'asin', 'listingId', 'price', 'fbaPrice', 'mfnPrice', 'currency', 'isActive', 'updatedAt']}
-      />
-      <DetailTable
-        title="All Sales Data"
-        rows={allSalesRows}
-        preferredColumns={['id', 'productId', 'productChannelId', 'channel', 'country', 'fulfillmentType', 'periodStart', 'periodEnd', 'unitsSold', 'revenue', 'velocity', 'currency', 'createdAt', 'updatedAt']}
-      />
+      <RawLinnworksData data={data} />
     </div>
   );
 }

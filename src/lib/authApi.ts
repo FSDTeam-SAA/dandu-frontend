@@ -35,12 +35,78 @@ export type UpdateProfilePayload = {
   avatarUrl?: string;
 };
 
+export type SkuProduct = Record<string, unknown> & {
+  id?: string | null;
+  sku?: string | null;
+  title?: string | null;
+  brand?: string | null;
+  status?: string | null;
+  currency?: string | null;
+  category?: string | null;
+  cost?: string | number | null;
+  weight?: string | number | null;
+  length?: string | number | null;
+  width?: string | number | null;
+  height?: string | number | null;
+  dimensions?: {
+    length?: string | number | null;
+    width?: string | number | null;
+    height?: string | number | null;
+  } | null;
+  material?: string | null;
+  thickness?: string | null;
+  packQty?: string | number | null;
+  imageUrl?: string | null;
+  productUrl?: string | null;
+  lastSyncedAt?: string | Date | null;
+};
+
+export type SkuStock = Record<string, unknown> & {
+  country?: string | null;
+  locationType?: string | null;
+  warehouse?: string | null;
+  quantity?: string | number | null;
+  reserved?: string | number | null;
+  inbound?: string | number | null;
+  available?: string | number | null;
+};
+
+export type SkuChannel = Record<string, unknown> & {
+  channel?: string | null;
+  country?: string | null;
+  asin?: string | null;
+  listingId?: string | null;
+  price?: string | number | null;
+  fbaPrice?: string | number | null;
+  mfnPrice?: string | number | null;
+  currency?: string | null;
+  isActive?: boolean | null;
+};
+
+export type SkuSalesMetric = Record<string, unknown> & {
+  channel?: string | null;
+  country?: string | null;
+  fulfillmentType?: string | null;
+  periodDays?: string | number | null;
+  days?: string | number | null;
+  windowDays?: string | number | null;
+  period?: string | null;
+  window?: string | null;
+  label?: string | null;
+  periodStart?: string | Date | null;
+  periodEnd?: string | Date | null;
+  unitsSold?: string | number | null;
+  revenue?: string | number | null;
+  velocity?: string | number | null;
+  currency?: string | null;
+};
+
 export type SkuMetrics = {
   sku: string;
-  product: Record<string, unknown> | null;
-  stock: Record<string, unknown>[];
-  channels: Record<string, unknown>[];
-  salesMetrics: Record<string, unknown>[];
+  product: SkuProduct | null;
+  stock: SkuStock[];
+  channels: SkuChannel[];
+  salesMetrics: SkuSalesMetric[];
 };
 
 export type SkuFilterParams = {
@@ -54,8 +120,6 @@ export type PaginatedSkus = {
   nextCursor: string | null;
   total: number;
 };
-
-export type ImportResult = Record<string, unknown>;
 
 export type DashboardMetrics = {
   salesVelocity: { channel: string; fulfillmentType?: string; fba: number; mfn: number }[];
@@ -77,9 +141,9 @@ export type SyncResult = {
 
 export type BackgroundJobResult = {
   status: 'QUEUED';
-  jobId?: string;
+  jobId: string | null;
   jobType: 'manual' | 'inventory-refresh';
-  queuedAt: string;
+  queuedAt: string | null;
 };
 
 export type InventoryRefreshResult = {
@@ -94,6 +158,8 @@ export type InventoryRefreshResult = {
   durationMs: number;
   errorMessage?: string;
 };
+
+export type InventoryRefreshOutcome = BackgroundJobResult | InventoryRefreshResult;
 
 export type HistoricalSalesIngestionPayload = {
   fromDate?: string;
@@ -151,9 +217,193 @@ type ApiEnvelope<T> = {
   data: T;
 };
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:5000/v1';
+const API_BASE_URL = import.meta.env?.VITE_API_BASE_URL ?? 'http://localhost:5000/v1';
 export const AUTH_STORAGE_KEY = 'dandu.auth.session';
 export const AUTH_SESSION_CHANGED_EVENT = 'dandu.auth.session.changed';
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isNullableString(value: unknown): value is string | null | undefined {
+  return value === undefined || value === null || typeof value === 'string';
+}
+
+function requireString(record: Record<string, unknown>, key: string, responseName: string): string {
+  const value = record[key];
+  if (typeof value !== 'string') {
+    throw new Error(`Invalid ${responseName} response: ${key} must be a string.`);
+  }
+  return value;
+}
+
+function requireNumber(record: Record<string, unknown>, key: string, responseName: string): number {
+  const value = record[key];
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new Error(`Invalid ${responseName} response: ${key} must be a finite number.`);
+  }
+  return value;
+}
+
+export function getErrorMessage(error: unknown, fallback: string): string {
+  if (isRecord(error)) {
+    const response = error.response;
+    if (isRecord(response) && isRecord(response.data) && typeof response.data.message === 'string') {
+      return response.data.message;
+    }
+    if (typeof error.message === 'string') return error.message;
+  }
+
+  return error instanceof Error && error.message ? error.message : fallback;
+}
+
+export function normalizeQueuedJobResult(
+  value: unknown,
+  fallbackJobType: BackgroundJobResult['jobType'],
+): BackgroundJobResult {
+  if (!isRecord(value)) throw new Error('Invalid queued job response.');
+
+  const rawJobId = value.jobId;
+  const jobId = typeof rawJobId === 'string' || typeof rawJobId === 'number'
+    ? String(rawJobId)
+    : null;
+  const jobType = value.jobType === 'manual' || value.jobType === 'inventory-refresh'
+    ? value.jobType
+    : fallbackJobType;
+  const queuedAt = typeof value.queuedAt === 'string' ? value.queuedAt : null;
+
+  if (value.status !== undefined && value.status !== 'QUEUED') {
+    throw new Error('Invalid queued job response: status must be QUEUED.');
+  }
+  if (!jobId && value.status !== 'QUEUED') {
+    throw new Error('Invalid queued job response: job identifier is missing.');
+  }
+
+  return { status: 'QUEUED', jobId, jobType, queuedAt };
+}
+
+function normalizeInventoryCompletion(value: Record<string, unknown>): InventoryRefreshResult {
+  if (value.status !== 'COMPLETED' && value.status !== 'FAILED') {
+    throw new Error('Invalid inventory refresh response: status is unsupported.');
+  }
+  if (!Array.isArray(value.remainingSkus) || !value.remainingSkus.every((sku) => typeof sku === 'string')) {
+    throw new Error('Invalid inventory refresh response: remainingSkus must contain strings.');
+  }
+  if (!isNullableString(value.errorMessage)) {
+    throw new Error('Invalid inventory refresh response: errorMessage must be a string.');
+  }
+
+  return {
+    status: value.status,
+    remainingSkus: value.remainingSkus,
+    remainingSkuCount: requireNumber(value, 'remainingSkuCount', 'inventory refresh'),
+    deletedSkus: requireNumber(value, 'deletedSkus', 'inventory refresh'),
+    updatedSkus: requireNumber(value, 'updatedSkus', 'inventory refresh'),
+    updatedStock: requireNumber(value, 'updatedStock', 'inventory refresh'),
+    updatedListings: requireNumber(value, 'updatedListings', 'inventory refresh'),
+    refreshedAt: requireString(value, 'refreshedAt', 'inventory refresh'),
+    durationMs: requireNumber(value, 'durationMs', 'inventory refresh'),
+    ...(value.errorMessage ? { errorMessage: value.errorMessage } : {}),
+  };
+}
+
+export function normalizeInventoryRefreshResult(value: unknown): InventoryRefreshOutcome {
+  if (!isRecord(value)) throw new Error('Invalid inventory refresh response.');
+  if (value.status === 'COMPLETED' || value.status === 'FAILED') {
+    return normalizeInventoryCompletion(value);
+  }
+  return normalizeQueuedJobResult(value, 'inventory-refresh');
+}
+
+export function normalizeHistoricalSalesResult(value: unknown): HistoricalSalesIngestionResult {
+  if (!isRecord(value) || (value.status !== 'COMPLETED' && value.status !== 'FAILED')) {
+    throw new Error('Invalid historical sales response.');
+  }
+  if (!isNullableString(value.errorMessage) || !isNullableString(value.errorCode) || !isNullableString(value.userMessage)) {
+    throw new Error('Invalid historical sales response: error metadata must be strings.');
+  }
+
+  let failedChunk: HistoricalSalesIngestionResult['failedChunk'];
+  if (value.failedChunk !== undefined && value.failedChunk !== null) {
+    if (!isRecord(value.failedChunk)) throw new Error('Invalid historical sales response: failedChunk is malformed.');
+    failedChunk = {
+      fromDate: requireString(value.failedChunk, 'fromDate', 'historical sales failed chunk'),
+      toDate: requireString(value.failedChunk, 'toDate', 'historical sales failed chunk'),
+      pageNumber: requireNumber(value.failedChunk, 'pageNumber', 'historical sales failed chunk'),
+    };
+  }
+
+  return {
+    status: value.status,
+    fromDate: requireString(value, 'fromDate', 'historical sales'),
+    toDate: requireString(value, 'toDate', 'historical sales'),
+    chunkDays: requireNumber(value, 'chunkDays', 'historical sales'),
+    chunksProcessed: requireNumber(value, 'chunksProcessed', 'historical sales'),
+    pagesProcessed: requireNumber(value, 'pagesProcessed', 'historical sales'),
+    ordersProcessed: requireNumber(value, 'ordersProcessed', 'historical sales'),
+    itemRowsProcessed: requireNumber(value, 'itemRowsProcessed', 'historical sales'),
+    metricsUpdated: requireNumber(value, 'metricsUpdated', 'historical sales'),
+    skippedItemRows: requireNumber(value, 'skippedItemRows', 'historical sales'),
+    failedRows: requireNumber(value, 'failedRows', 'historical sales'),
+    clearedMetrics: requireNumber(value, 'clearedMetrics', 'historical sales'),
+    syncedAt: requireString(value, 'syncedAt', 'historical sales'),
+    durationMs: requireNumber(value, 'durationMs', 'historical sales'),
+    ...(value.errorMessage ? { errorMessage: value.errorMessage } : {}),
+    ...(value.errorCode ? { errorCode: value.errorCode } : {}),
+    ...(value.userMessage ? { userMessage: value.userMessage } : {}),
+    ...(failedChunk ? { failedChunk } : {}),
+  };
+}
+
+function isSkuMetrics(value: unknown): value is SkuMetrics {
+  return isRecord(value)
+    && typeof value.sku === 'string'
+    && (value.product === null || isRecord(value.product))
+    && Array.isArray(value.stock)
+    && value.stock.every(isRecord)
+    && Array.isArray(value.channels)
+    && value.channels.every(isRecord)
+    && Array.isArray(value.salesMetrics)
+    && value.salesMetrics.every(isRecord);
+}
+
+export function normalizePaginatedSkus(value: unknown): PaginatedSkus {
+  if (!isRecord(value)
+    || !Array.isArray(value.items)
+    || !value.items.every(isSkuMetrics)
+    || (value.nextCursor !== null && typeof value.nextCursor !== 'string')
+    || typeof value.total !== 'number'
+    || !Number.isFinite(value.total)
+    || value.total < 0) {
+    throw new Error('Invalid paginated SKU response.');
+  }
+
+  return {
+    items: value.items,
+    nextCursor: value.nextCursor,
+    total: value.total,
+  };
+}
+
+export function normalizeDashboardMetrics(value: unknown): DashboardMetrics {
+  if (!isRecord(value) || !Array.isArray(value.stockDistribution)) {
+    throw new Error('Invalid dashboard stock response.');
+  }
+
+  const stockDistribution = value.stockDistribution.map((entry) => {
+    if (!isRecord(entry)
+      || typeof entry.name !== 'string'
+      || typeof entry.value !== 'number'
+      || !Number.isFinite(entry.value)
+      || entry.value < 0
+      || typeof entry.fill !== 'string') {
+      throw new Error('Invalid dashboard stock response: stock distribution is malformed.');
+    }
+    return { name: entry.name, value: entry.value, fill: entry.fill };
+  });
+
+  return { salesVelocity: [], stockDistribution, revenueTrend: [] };
+}
 
 function readStoredAuthSession(): AuthSession | null {
   try {
@@ -188,15 +438,17 @@ async function refreshStoredAuthSession(): Promise<string | null> {
     body: JSON.stringify({ refreshToken: session.refreshToken }),
   });
 
-  const body = await response.json().catch(() => null);
-  if (!response.ok || !body?.data?.accessToken) {
+  const body: unknown = await response.json().catch(() => null);
+  if (!response.ok || !isRecord(body) || !isRecord(body.data) || typeof body.data.accessToken !== 'string') {
     writeStoredAuthSession(null);
     return null;
   }
 
   const refreshedSession: AuthSession = {
     ...session,
-    ...body.data,
+    accessToken: body.data.accessToken,
+    refreshToken: typeof body.data.refreshToken === 'string' ? body.data.refreshToken : session.refreshToken,
+    expiresIn: typeof body.data.expiresIn === 'number' ? body.data.expiresIn : session.expiresIn,
   };
   writeStoredAuthSession(refreshedSession);
   return refreshedSession.accessToken;
@@ -206,7 +458,7 @@ async function parseResponse<T>(response: Response): Promise<ApiEnvelope<T>> {
   const contentType = response.headers.get('content-type');
   const isJson = contentType && contentType.includes('application/json');
 
-  let body: any = null;
+  let body: unknown = null;
   if (isJson) {
     body = await response.json().catch(() => null);
   } else {
@@ -221,13 +473,17 @@ async function parseResponse<T>(response: Response): Promise<ApiEnvelope<T>> {
 
   if (!response.ok) {
     let message = 'Request failed';
-    if (body && typeof body === 'object' && 'message' in body) {
+    if (isRecord(body) && 'message' in body) {
       message = String(body.message);
       if (message.includes('Cannot GET')) {
         message = 'API endpoint not found. Backend may be offline or syncing.';
       }
     }
     throw new Error(message);
+  }
+
+  if (!isRecord(body) || typeof body.success !== 'boolean' || typeof body.message !== 'string' || !('data' in body)) {
+    throw new Error('Server returned an invalid API response.');
   }
 
   return body as ApiEnvelope<T>;
@@ -251,7 +507,7 @@ async function request<T>(
   if (response.status === 401 && options.token && path !== '/auth/refresh-token') {
     const cloned = response.clone();
     const body = await cloned.json().catch(() => null);
-    const message = body && typeof body === 'object' && 'message' in body
+    const message = isRecord(body) && 'message' in body
       ? String(body.message)
       : '';
 
@@ -264,133 +520,6 @@ async function request<T>(
   }
 
   return parseResponse<T>(response);
-}
-
-
-const PERIOD_MULTIPLIERS: Record<string, number> = {
-  '7D':   0.23,  // ~7/30 of monthly
-  '30D':  1.0,
-  '90D':  3.1,
-  '365D': 13.2,
-};
-
-const BASE_VELOCITY = [
-  { channel: 'Amazon US', fba: 1450, mfn: 350 },
-  { channel: 'Amazon CA', fba: 520,  mfn: 85  },
-  { channel: 'eBay',      fba: 0,    mfn: 890  },
-  { channel: 'Dandu',     fba: 0,    mfn: 410  },
-];
-
-const BASE_CHANNEL_PERF = [
-  { channel: 'Amazon US',        fulfillment: 'FBA', units: 1450, revenue: 28955, growth: 12.4, stockCover: 18 },
-  { channel: 'Amazon CA',        fulfillment: 'FBA', units: 520,  revenue: 12948, growth: 8.1,  stockCover: 23 },
-  { channel: 'eBay US',          fulfillment: 'MFN', units: 890,  revenue: 16465, growth: -2.3, stockCover: 42 },
-  { channel: 'DistinctAndUnique',fulfillment: 'MFN', units: 410,  revenue: 6150,  growth: 5.7,  stockCover: 61 },
-];
-
-function buildDashboardMetrics(period: string): DashboardMetrics {
-  const m = PERIOD_MULTIPLIERS[period] ?? 1.0;
-  return {
-    salesVelocity: BASE_VELOCITY.map(v => ({
-      channel: v.channel,
-      fba: Math.round(v.fba * m),
-      mfn: Math.round(v.mfn * m),
-    })),
-    stockDistribution: [
-      { name: 'US FBA',     value: 8500,  fill: '#047857' },
-      { name: 'CA FBA',     value: 2400,  fill: '#34d399' },
-      { name: 'US MFN Main',value: 14200, fill: '#0f172a' },
-      { name: 'UK FBA',     value: 950,   fill: '#64748b' },
-    ],
-    revenueTrend: [
-      { month: 'Jan', revenue: 42000 },
-      { month: 'Feb', revenue: 48500 },
-      { month: 'Mar', revenue: 51200 },
-      { month: 'Apr', revenue: 64000 },
-      { month: 'May', revenue: 68500 },
-      { month: 'Jun', revenue: 75200 },
-    ],
-  };
-}
-
-export const CHANNEL_PERFORMANCE_BASE = BASE_CHANNEL_PERF;
-
-const generateMockSkus = (): SkuMetrics[] => {
-  const prefixes = ['REBAR', 'STEEL', 'ALUM', 'BRASS', 'COPPER'];
-  const types = ['CTR', 'SIDE', 'FLAT', 'ROUD'];
-  const sizes = ['8MM', '10MM', '12MM', '16MM', '20MM'];
-  
-  const catalog: SkuMetrics[] = [];
-  
-  for (let i = 0; i < 45; i++) {
-    const prefix = prefixes[i % prefixes.length];
-    const type = types[(i * 3) % types.length];
-    const size = sizes[(i * 7) % sizes.length];
-    const sku = `${prefix}-${type}-${size}-${Math.floor(Math.random() * 900) + 100}`;
-    
-    // Random stock to hit different status buckets
-    const rand = Math.random();
-    let fbaStock = 0;
-    let mfnStock = 0;
-    if (rand > 0.8) {
-      // Out of stock
-    } else if (rand > 0.6) {
-      // Low stock
-      fbaStock = Math.floor(Math.random() * 10);
-      mfnStock = Math.floor(Math.random() * 20);
-    } else {
-      // Healthy stock
-      fbaStock = Math.floor(Math.random() * 500) + 50;
-      mfnStock = Math.floor(Math.random() * 1500) + 100;
-    }
-
-    const hasAmazon = Math.random() > 0.2;
-    const hasEbay = Math.random() > 0.4;
-    
-    const channels = [];
-    if (hasAmazon) {
-      channels.push({ channel: 'AMAZON', country: 'US', asin: `B0${Math.floor(Math.random() * 10000000)}`, price: (Math.random() * 30 + 10).toFixed(2), currency: 'USD' });
-    }
-    if (hasEbay) {
-      channels.push({ channel: 'EBAY', country: 'US', asin: `EBY-${Math.floor(Math.random() * 1000000)}`, price: (Math.random() * 30 + 10).toFixed(2), currency: 'USD' });
-    }
-    channels.push({ channel: 'DANDU', country: 'US', asin: `DDU-${sku}`, price: (Math.random() * 30 + 5).toFixed(2), currency: 'USD' });
-
-    catalog.push({
-      sku,
-      product: {
-        title: `Heavy Duty ${size} ${prefix} ${type} Cut`,
-        brand: 'BuildTech',
-        status: 'ACTIVE',
-        cost: (Math.random() * 5 + 1).toFixed(2),
-        currency: 'USD',
-        weight: (Math.random() * 5 + 0.5).toFixed(2),
-        length: '24.00',
-        width: '0.50',
-        height: '0.50',
-        imageUrl: `https://images.unsplash.com/photo-${1518709268805 + i}?w=500&q=80`, // Just dummy urls to simulate varied images
-      },
-      stock: [
-        { country: 'US', locationType: 'FBA', available: fbaStock, warehouse: 'US-FBA-1' },
-        { country: 'US', locationType: 'MFN', available: mfnStock, warehouse: 'US-MAIN' },
-      ],
-      channels,
-      salesMetrics: [
-        { channel: 'AMAZON', country: 'US', unitsSold: fbaStock > 0 ? Math.floor(Math.random() * 100) : 0, periodStart: '2023-01-01', periodEnd: '2023-01-30' },
-        { channel: 'EBAY', country: 'US', unitsSold: mfnStock > 0 ? Math.floor(Math.random() * 50) : 0, periodStart: '2023-01-01', periodEnd: '2023-01-30' }
-      ],
-    });
-  }
-  return catalog;
-};
-
-const MOCK_CATALOG = generateMockSkus();
-
-const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-async function mockRequest<T>(data: T, delayMs = 600): Promise<ApiEnvelope<T>> {
-  await delay(delayMs);
-  return { success: true, message: 'Success', data };
 }
 
 export const authApi = {
@@ -485,7 +614,13 @@ export const authApi = {
     });
   },
 
-  browseSkus(accessToken: string, filters: SkuFilterParams, cursor?: string, limit = 10) {
+  async browseSkus(
+    accessToken: string,
+    filters: SkuFilterParams,
+    cursor?: string,
+    limit = 10,
+    signal?: AbortSignal,
+  ) {
     const params = new URLSearchParams();
     if (filters.q) params.set('q', filters.q);
     if (filters.stockStatus) params.set('stockStatus', filters.stockStatus);
@@ -493,56 +628,85 @@ export const authApi = {
     if (cursor) params.set('cursor', cursor);
     params.set('limit', String(limit));
 
-    return request<PaginatedSkus>(`/sku-dashboard/browse?${params.toString()}`, {
+    const response = await request<unknown>(`/sku-dashboard/browse?${params.toString()}`, {
       token: accessToken,
+      signal,
     });
+    return { ...response, data: normalizePaginatedSkus(response.data) };
   },
 
-  importSkuReport(accessToken: string, payload: { fileName: string; content: string }) {
-    return request<ImportResult>('/sku-dashboard/import', {
+  async browseAllSkus(accessToken: string, signal?: AbortSignal): Promise<SkuMetrics[]> {
+    const items: SkuMetrics[] = [];
+    const seenCursors = new Set<string>();
+    let cursor: string | undefined;
+    let expectedTotal: number | null = null;
+
+    while (true) {
+      const response = await this.browseSkus(accessToken, {}, cursor, 100, signal);
+      expectedTotal ??= response.data.total;
+      if (response.data.total !== expectedTotal) {
+        throw new Error('The SKU catalog changed while it was loading. Retry to calculate accurate totals.');
+      }
+      items.push(...response.data.items);
+
+      const nextCursor = response.data.nextCursor;
+      if (!nextCursor) break;
+      if (seenCursors.has(nextCursor)) {
+        throw new Error('The SKU catalog returned a repeated cursor. Totals were not calculated.');
+      }
+      seenCursors.add(nextCursor);
+      cursor = nextCursor;
+    }
+
+    if (expectedTotal === null || items.length !== expectedTotal) {
+      throw new Error(`Incomplete SKU response: received ${items.length} of ${expectedTotal ?? 0} records.`);
+    }
+    return items;
+  },
+
+  async getDashboardMetrics(accessToken: string, period: string = '30D', signal?: AbortSignal) {
+    const response = await request<unknown>(`/sku-dashboard/dashboard?period=${encodeURIComponent(period)}`, {
+      token: accessToken,
+      signal,
+    });
+    return { ...response, data: normalizeDashboardMetrics(response.data) };
+  },
+
+  async triggerLinnworksSync(accessToken: string) {
+    const response = await request<unknown>('/sku-dashboard/sync/linnworks', {
       method: 'POST',
       token: accessToken,
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ queued: true }),
     });
+    return { ...response, data: normalizeQueuedJobResult(response.data, 'manual') };
   },
 
-  getDashboardMetrics(accessToken: string, period: string = '30D') {
-    return request<DashboardMetrics>(`/sku-dashboard/dashboard?period=${encodeURIComponent(period)}`, {
-      token: accessToken,
-    });
-  },
-
-  triggerLinnworksSync(accessToken: string) {
-    return request<BackgroundJobResult>('/sku-dashboard/sync/linnworks', {
+  async refreshInventory(accessToken: string) {
+    const response = await request<unknown>('/sku-dashboard/refresh-inventory', {
       method: 'POST',
       token: accessToken,
       body: JSON.stringify({}),
     });
+    return { ...response, data: normalizeInventoryRefreshResult(response.data) };
   },
 
-  refreshInventory(accessToken: string) {
-    return request<BackgroundJobResult>('/sku-dashboard/refresh-inventory', {
-      method: 'POST',
-      token: accessToken,
-      body: JSON.stringify({}),
-    });
-  },
-
-  triggerHistoricalSalesIngestion(accessToken: string, payload: HistoricalSalesIngestionPayload = {}) {
-    return request<HistoricalSalesIngestionResult>('/sku-dashboard/sync/linnworks/historical-sales', {
+  async triggerHistoricalSalesIngestion(accessToken: string, payload: HistoricalSalesIngestionPayload = {}) {
+    const response = await request<unknown>('/sku-dashboard/sync/linnworks/historical-sales', {
       method: 'POST',
       token: accessToken,
       body: JSON.stringify(payload),
     });
+    return { ...response, data: normalizeHistoricalSalesResult(response.data) };
   },
 
-  getInventoryAlerts(accessToken: string) {
+  getInventoryAlerts(accessToken: string, signal?: AbortSignal) {
     return request<InventoryAlertItem[]>('/sku-dashboard/alerts', {
       token: accessToken,
+      signal,
     });
   },
 
-  updateProduct(accessToken: string, sku: string, data: Partial<SkuMetrics['product']>) {
+  updateProduct(accessToken: string, sku: string, data: Partial<SkuProduct>) {
     return request<unknown>(`/sku-dashboard/product/${encodeURIComponent(sku)}`, {
       method: 'PATCH',
       token: accessToken,

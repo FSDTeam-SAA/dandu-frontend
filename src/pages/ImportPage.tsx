@@ -1,14 +1,8 @@
 import { ChangeEvent, useRef, useState } from 'react';
 import { CalendarDays, CheckCircle2, FileUp, History, Loader2, Upload, XCircle } from 'lucide-react';
 import { InlineError, Panel } from '../components/ui';
-import { authApi, AuthSession, HistoricalSalesIngestionResult } from '../lib/authApi';
-
-type ImportResult = {
-  batchId: string;
-  totalRows: number;
-  importedRows: number;
-  failedRows: number;
-};
+import { authApi, AuthSession, getErrorMessage, HistoricalSalesIngestionResult } from '../lib/authApi';
+import { previewCsv, type CsvPreview } from '../lib/csvPreview';
 
 type HistoricalImportFailure = {
   message: string;
@@ -54,8 +48,8 @@ function createHistoricalFailure(result: HistoricalSalesIngestionResult): Histor
   };
 }
 
-function createHistoricalRequestFailure(err: any): HistoricalImportFailure {
-  const rawMessage = err?.response?.data?.message || err?.message;
+function createHistoricalRequestFailure(error: unknown): HistoricalImportFailure {
+  const rawMessage = getErrorMessage(error, 'Historical sales request failed.');
   const isMissingRoute =
     typeof rawMessage === 'string' &&
     rawMessage.includes('Cannot POST') &&
@@ -80,8 +74,7 @@ export function ImportPage({ session }: { session: AuthSession }) {
 
   const [fileName, setFileName] = useState<string | null>(null);
   const [fileContent, setFileContent] = useState<string | null>(null);
-  const [result, setResult] = useState<ImportResult | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<CsvPreview | null>(null);
   const [error, setError] = useState('');
   const [dragging, setDragging] = useState(false);
   const [historicalFrom, setHistoricalFrom] = useState(initialHistoricalRange.from);
@@ -99,7 +92,9 @@ export function ImportPage({ session }: { session: AuthSession }) {
     setResult(null);
     setError('');
     const reader = new FileReader();
-    reader.onload = (e) => setFileContent(e.target?.result as string ?? '');
+    reader.onload = (event) => {
+      setFileContent(typeof event.target?.result === 'string' ? event.target.result : '');
+    };
     reader.readAsText(file);
   };
 
@@ -115,21 +110,14 @@ export function ImportPage({ session }: { session: AuthSession }) {
     if (file) readFile(file);
   };
 
-  const submit = async () => {
+  const submit = () => {
     if (!fileName || !fileContent) return;
-    setLoading(true);
     setError('');
     setResult(null);
     try {
-      const response = await authApi.importSkuReport(session.accessToken, {
-        fileName,
-        content: fileContent,
-      });
-      setResult(response.data as ImportResult);
-    } catch (err: any) {
-      setError(err?.response?.data?.message || err?.message || 'Import failed');
-    } finally {
-      setLoading(false);
+      setResult(previewCsv(fileName, fileContent));
+    } catch (validationError) {
+      setError(getErrorMessage(validationError, 'CSV validation failed.'));
     }
   };
 
@@ -157,8 +145,8 @@ export function ImportPage({ session }: { session: AuthSession }) {
         return;
       }
       setHistoricalResult(response.data);
-    } catch (err: any) {
-      setHistoricalError(createHistoricalRequestFailure(err));
+    } catch (requestError) {
+      setHistoricalError(createHistoricalRequestFailure(requestError));
     } finally {
       setHistoricalLoading(false);
     }
@@ -166,10 +154,10 @@ export function ImportPage({ session }: { session: AuthSession }) {
 
   return (
     <div className="space-y-4">
-      <Panel title="Historical CSV Import">
+      <Panel title="CSV Validation Preview">
         <p className="mb-4 text-sm text-slate-500">
-          Upload a Linnworks export CSV (My Inventory, Stock Level Report, or any standard export).
-          The system will automatically map columns and upsert products, stock levels, and channel listings.
+          Check a Linnworks CSV for a usable SKU or ItemNumber column before using it elsewhere.
+          This preview runs only in your browser and makes no database changes.
         </p>
 
         {/* Drop Zone */}
@@ -201,9 +189,7 @@ export function ImportPage({ session }: { session: AuthSession }) {
               <div className="text-center">
                 <p className="font-bold text-slate-900">{fileName}</p>
                 <p className="text-sm text-slate-500">
-                  {fileContent
-                    ? `${(fileContent.split('\n').length - 1).toLocaleString()} data rows detected`
-                    : 'Reading file…'}
+                  {fileContent ? 'Ready for local validation' : 'Reading file…'}
                 </p>
               </div>
               <button
@@ -232,17 +218,13 @@ export function ImportPage({ session }: { session: AuthSession }) {
         <div className="mt-4 flex items-center gap-3">
           <button
             onClick={submit}
-            disabled={!fileName || !fileContent || loading}
+              disabled={!fileName || !fileContent}
             className="inline-flex h-11 items-center gap-2 rounded-xl bg-emerald-700 px-5 text-sm font-black text-white shadow-sm transition hover:bg-emerald-800 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {loading ? (
-              <><Loader2 className="size-4 animate-spin" /> Importing…</>
-            ) : (
-              <><FileUp className="size-4" /> Import Report</>
-            )}
+            <><FileUp className="size-4" /> Validate CSV</>
           </button>
 
-          {fileName && !loading && (
+          {fileName && (
             <button
               onClick={reset}
               className="text-sm font-semibold text-slate-400 hover:text-slate-700 transition"
@@ -259,7 +241,7 @@ export function ImportPage({ session }: { session: AuthSession }) {
 
       {/* Result card */}
       {result && (
-        <Panel title="Import Result">
+        <Panel title="Validation Result — no database changes">
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <StatCard
               label="Total Rows"
@@ -267,36 +249,33 @@ export function ImportPage({ session }: { session: AuthSession }) {
               colour="slate"
             />
             <StatCard
-              label="Imported"
-              value={result.importedRows.toLocaleString()}
+              label="Valid Rows"
+              value={result.validRows.toLocaleString()}
               colour="emerald"
               icon={<CheckCircle2 className="size-5" />}
             />
             <StatCard
-              label="Failed"
-              value={result.failedRows.toLocaleString()}
-              colour={result.failedRows > 0 ? 'red' : 'slate'}
-              icon={result.failedRows > 0 ? <XCircle className="size-5" /> : undefined}
+              label="Needs Attention"
+              value={result.invalidRows.toLocaleString()}
+              colour={result.invalidRows > 0 ? 'red' : 'slate'}
+              icon={result.invalidRows > 0 ? <XCircle className="size-5" /> : undefined}
             />
             <StatCard
-              label="Batch ID"
-              value={result.batchId.slice(0, 8) + '…'}
+              label="Storage"
+              value="Not written"
               colour="slate"
-              mono
             />
           </div>
 
-          {result.failedRows > 0 && (
+          {result.invalidRows > 0 && (
             <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-              <strong>{result.failedRows}</strong> rows could not be imported.
-              Check that your CSV has a <strong>SKU</strong> / <strong>ItemNumber</strong> column.
+              <strong>{result.invalidRows}</strong> rows need attention. {result.issues.slice(0, 5).map((issue) => `Row ${issue.rowNumber}: ${issue.message}`).join(' · ')}
             </p>
           )}
 
-          {result.importedRows > 0 && result.failedRows === 0 && (
+          {result.validRows > 0 && result.invalidRows === 0 && (
             <p className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">
-              ✓ All {result.importedRows.toLocaleString()} rows imported successfully.
-              Go to the <strong>SKU Catalog</strong> tab to search your inventory.
+              All {result.validRows.toLocaleString()} rows contain a SKU value. This validation did not upload or save the file.
             </p>
           )}
         </Panel>
@@ -304,7 +283,7 @@ export function ImportPage({ session }: { session: AuthSession }) {
 
       <Panel title="Historical Linnworks Sales">
         <p className="mb-4 text-sm text-slate-500">
-          Import processed orders directly from Linnworks using 90-day API chunks, then write SKU quantities into sales metrics.
+          Request historical sales ingestion from the deployed API and display only its reported result.
         </p>
 
         <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
@@ -359,7 +338,7 @@ export function ImportPage({ session }: { session: AuthSession }) {
 
         {historicalLoading && (
           <p className="mt-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700">
-            Paging processed orders and writing item metrics…
+            Waiting for the historical-sales API response…
           </p>
         )}
 
